@@ -1,0 +1,12 @@
+# Local development. Defaults point at the PostgreSQL container from docker-compose.yml;
+# when running inside Compose, the SPRING_DATASOURCE_* environment variables take precedence.
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:${POSTGRES_HOST_PORT:5432}/${POSTGRES_DB:jobprocessor}
+    username: ${POSTGRES_USER:jobprocessor}
+    password: ${POSTGRES_PASSWORD}
+
+jobprocessor:
+  simulation:
+    failure-injection-enabled: true

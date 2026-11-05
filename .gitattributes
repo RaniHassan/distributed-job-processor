@@ -1,0 +1,5 @@
+* text=auto
+# The wrapper script runs inside Linux containers and must keep LF endings.
+/mvnw text eol=lf
+*.sh text eol=lf
+*.cmd text eol=crlf

@@ -1,0 +1,31 @@
+# Test profile: short timings so lifecycle, lease, retry and recovery scenarios run in seconds.
+# The datasource is provided by Testcontainers (@ServiceConnection).
+
+jobprocessor:
+  worker:
+    threads: 5
+    cancellation-check-interval: 100ms
+  dispatcher:
+    poll-interval: 100ms
+  lease:
+    duration: 2s
+    heartbeat-interval: 500ms
+  recovery:
+    poll-interval: 500ms
+  retry:
+    max-retries: 3
+    backoff: 200ms,400ms,800ms
+    jitter-factor: 0.0
+  simulation:
+    min-duration: 500ms
+    max-duration: 2s
+    failure-injection-enabled: true
+  shutdown:
+    timeout: 5s
+  idempotency:
+    retention: 24h
+    cleanup-interval: 1h
+
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 10s

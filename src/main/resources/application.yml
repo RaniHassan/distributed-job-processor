@@ -1,0 +1,70 @@
+# Base configuration. Values here are the production defaults from README §20.
+# Infrastructure settings and credentials come from the environment, e.g.
+# SPRING_DATASOURCE_URL / SPRING_DATASOURCE_USERNAME / SPRING_DATASOURCE_PASSWORD.
+
+spring:
+  application:
+    name: distributed-job-processor
+  datasource:
+    hikari:
+      # Fail fast when PostgreSQL is unreachable instead of hanging request threads.
+      connection-timeout: 5000
+      maximum-pool-size: ${DB_POOL_SIZE:15}
+      # The JDBC driver otherwise inherits the JVM's time zone for the session; pin it so
+      # SQL date/time functions behave identically on every instance.
+      connection-init-sql: SET TIME ZONE 'UTC'
+  jpa:
+    open-in-view: false
+    hibernate:
+      # Flyway owns the schema; Hibernate only checks that entities match it.
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  lifecycle:
+    # Must exceed jobprocessor.shutdown.timeout so the worker pool can drain.
+    timeout-per-shutdown-phase: 40s
+
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+
+jobprocessor:
+  worker:
+    threads: 5
+    cancellation-check-interval: 500ms
+  dispatcher:
+    poll-interval: 1s
+  lease:
+    duration: 30s
+    heartbeat-interval: 10s
+  recovery:
+    poll-interval: 5s
+  retry:
+    max-retries: 3
+    backoff: 5s,10s,20s
+    jitter-factor: 0.2
+  simulation:
+    min-duration: 1m
+    max-duration: 5m
+    failure-injection-enabled: false
+  shutdown:
+    timeout: 30s
+  idempotency:
+    retention: 24h
+    cleanup-interval: 1h
