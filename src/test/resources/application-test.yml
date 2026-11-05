@@ -1,5 +1,5 @@
 # Test profile: short timings so lifecycle, lease, retry and recovery scenarios run in seconds.
-# The datasource is provided by Testcontainers (@ServiceConnection).
+# The datasource is provided by Testcontainers (@ServiceConnection). Tests create their own users.
 
 jobprocessor:
   worker:
@@ -25,6 +25,10 @@ jobprocessor:
   idempotency:
     retention: 24h
     cleanup-interval: 1h
+  security:
+    jwt:
+      # A fresh random signing key per test context; no secret is committed.
+      secret: ${random.value}${random.value}
 
 spring:
   lifecycle:

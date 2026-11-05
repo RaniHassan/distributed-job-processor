@@ -8,13 +8,21 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.bind.validation.BindValidationException;
 import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.util.unit.DataSize;
 
 class JobProcessorPropertiesTest {
 
-    /** Loads src/main/resources/application.yml, i.e. the production defaults. */
-    private final ApplicationContextRunner runner = new ApplicationContextRunner()
+    private static final String VALID_SECRET = "JWT_SECRET=0123456789abcdef0123456789abcdef";
+
+    /**
+     * Loads src/main/resources/application.yml, i.e. the production defaults, with JWT_SECRET
+     * supplied the way the environment would.
+     */
+    private final ApplicationContextRunner bareRunner = new ApplicationContextRunner()
             .withInitializer(new ConfigDataApplicationContextInitializer())
             .withUserConfiguration(JobProcessorConfiguration.class, FailureInjectionGuard.class);
+
+    private final ApplicationContextRunner runner = bareRunner.withPropertyValues(VALID_SECRET);
 
     @Test
     void defaultsMatchSpecification() {
@@ -35,7 +43,41 @@ class JobProcessorPropertiesTest {
             assertThat(p.simulation().failureInjectionEnabled()).isFalse();
             assertThat(p.shutdown().timeout()).isEqualTo(Duration.ofSeconds(30));
             assertThat(p.idempotency().retention()).isEqualTo(Duration.ofHours(24));
+            assertThat(p.api().maxRequestSize()).isEqualTo(DataSize.ofKilobytes(64));
+            assertThat(p.api().maxJsonNestingDepth()).isEqualTo(32);
+            assertThat(p.security().jwt().accessTokenTtl()).isEqualTo(Duration.ofMinutes(15));
+            assertThat(p.security().jwt().issuer()).isEqualTo("distributed-job-processor");
         });
+    }
+
+    @Test
+    void rejectsMissingJwtSecret() {
+        bareRunner.run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(context.getStartupFailure())
+                    .rootCause()
+                    .isInstanceOf(BindValidationException.class)
+                    .hasMessageContaining("set the JWT_SECRET environment variable");
+        });
+    }
+
+    @Test
+    void rejectsJwtSecretShorterThan32Bytes() {
+        assertBindingFails("at least 32 bytes", "JWT_SECRET=too-short-secret");
+    }
+
+    @Test
+    void jwtSecretIsNeverPrinted() {
+        runner.run(context -> {
+            String printed = context.getBean(JobProcessorProperties.class).toString();
+
+            assertThat(printed).doesNotContain("0123456789abcdef").contains("secret=******");
+        });
+    }
+
+    @Test
+    void rejectsNonPositiveRequestSize() {
+        assertBindingFails("api.max-request-size must be positive", "jobprocessor.api.max-request-size=0B");
     }
 
     @Test

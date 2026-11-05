@@ -6,11 +6,14 @@ import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.util.unit.DataSize;
 import org.springframework.validation.annotation.Validated;
 
 /**
@@ -27,7 +30,9 @@ public record JobProcessorProperties(
         @Valid @NotNull Retry retry,
         @Valid @NotNull Simulation simulation,
         @Valid @NotNull Shutdown shutdown,
-        @Valid @NotNull Idempotency idempotency) {
+        @Valid @NotNull Idempotency idempotency,
+        @Valid @NotNull Api api,
+        @Valid @NotNull Security security) {
 
     /**
      * Heartbeats only renew RUNNING jobs, so a cancelling worker must notice the request well
@@ -135,6 +140,50 @@ public record JobProcessorProperties(
         public boolean isPositiveDurations() {
             return (retention == null || isPositive(retention))
                     && (cleanupInterval == null || isPositive(cleanupInterval));
+        }
+    }
+
+    /** Limits applied to every API request before it reaches a controller. */
+    public record Api(
+            @NotNull DataSize maxRequestSize,
+            @Min(2) @Max(1000) int maxJsonNestingDepth) {
+
+        @AssertTrue(message = "api.max-request-size must be positive")
+        public boolean isMaxRequestSizePositive() {
+            return maxRequestSize == null || maxRequestSize.toBytes() > 0;
+        }
+    }
+
+    public record Security(@Valid @NotNull JwtSettings jwt) {
+    }
+
+    /** HS256 access-token settings. The secret is never printed by {@link #toString()}. */
+    public record JwtSettings(
+            @NotNull String secret,
+            @NotBlank String issuer,
+            @NotNull Duration accessTokenTtl) {
+
+        /** HS256 needs a key at least as long as its 256-bit output. */
+        static final int MIN_SECRET_BYTES = 32;
+
+        @AssertTrue(message = "security.jwt.secret is not configured (set the JWT_SECRET environment variable)")
+        public boolean isSecretConfigured() {
+            return secret == null || (!secret.isBlank() && !secret.contains("${"));
+        }
+
+        @AssertTrue(message = "security.jwt.secret must be at least 32 bytes (256 bits) for HS256")
+        public boolean isSecretLongEnough() {
+            return secret == null || secret.getBytes(StandardCharsets.UTF_8).length >= MIN_SECRET_BYTES;
+        }
+
+        @AssertTrue(message = "security.jwt.access-token-ttl must be positive")
+        public boolean isAccessTokenTtlPositive() {
+            return accessTokenTtl == null || isPositive(accessTokenTtl);
+        }
+
+        @Override
+        public String toString() {
+            return "JwtSettings[secret=******, issuer=" + issuer + ", accessTokenTtl=" + accessTokenTtl + "]";
         }
     }
 

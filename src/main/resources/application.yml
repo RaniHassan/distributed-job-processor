@@ -1,6 +1,6 @@
 # Base configuration. Values here are the production defaults from README §20.
 # Infrastructure settings and credentials come from the environment, e.g.
-# SPRING_DATASOURCE_URL / SPRING_DATASOURCE_USERNAME / SPRING_DATASOURCE_PASSWORD.
+# SPRING_DATASOURCE_URL / SPRING_DATASOURCE_USERNAME / SPRING_DATASOURCE_PASSWORD and JWT_SECRET.
 
 spring:
   application:
@@ -28,6 +28,21 @@ spring:
   lifecycle:
     # Must exceed jobprocessor.shutdown.timeout so the worker pool can drain.
     timeout-per-shutdown-phase: 40s
+  jackson:
+    deserialization:
+      # Reject unknown fields instead of silently ignoring them (request structure validation).
+      fail-on-unknown-properties: true
+    parser:
+      # Duplicate keys would make the idempotency request hash ambiguous.
+      strict-duplicate-detection: true
+  data:
+    web:
+      pageable:
+        default-page-size: 20
+        max-page-size: 100
+  mvc:
+    problemdetails:
+      enabled: true
 
 server:
   port: ${SERVER_PORT:8080}
@@ -43,6 +58,11 @@ management:
       show-details: never
       probes:
         enabled: true
+
+logging:
+  pattern:
+    # Request trace id from TraceIdFilter, shown in every log line of the request.
+    correlation: "[%X{traceId:-}] "
 
 jobprocessor:
   worker:
@@ -68,3 +88,11 @@ jobprocessor:
   idempotency:
     retention: 24h
     cleanup-interval: 1h
+  api:
+    max-request-size: 64KB
+    max-json-nesting-depth: 32
+  security:
+    jwt:
+      secret: ${JWT_SECRET}
+      issuer: distributed-job-processor
+      access-token-ttl: 15m

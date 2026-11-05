@@ -10,3 +10,13 @@ spring:
 jobprocessor:
   simulation:
     failure-injection-enabled: true
+  # Test users created at startup (dev/test only). Passwords must come from the environment;
+  # startup fails if a SEED_*_PASSWORD variable is missing.
+  seed:
+    users:
+      - username: ${SEED_USER_USERNAME:alice}
+        password: ${SEED_USER_PASSWORD}
+        role: USER
+      - username: ${SEED_ADMIN_USERNAME:admin}
+        password: ${SEED_ADMIN_PASSWORD}
+        role: ADMIN

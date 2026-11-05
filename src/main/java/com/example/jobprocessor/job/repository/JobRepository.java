@@ -16,5 +16,7 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
 
     Optional<Job> findByIdAndOwnerId(UUID id, UUID ownerId);
 
+    boolean existsByIdAndOwnerId(UUID id, UUID ownerId);
+
     Page<Job> findByOwnerId(UUID ownerId, Pageable pageable);
 }

@@ -24,6 +24,12 @@ x-app-env: &app-env
   SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-jobprocessor}
   SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-jobprocessor}
   SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+  JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env (at least 32 characters)}
+  # Seed users exist only in the dev profile.
+  SEED_USER_USERNAME: ${SEED_USER_USERNAME:-alice}
+  SEED_USER_PASSWORD: ${SEED_USER_PASSWORD:-}
+  SEED_ADMIN_USERNAME: ${SEED_ADMIN_USERNAME:-admin}
+  SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
 
 services:
   postgres:
