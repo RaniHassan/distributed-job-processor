@@ -13,7 +13,7 @@ JUnit 5 · Testcontainers · Docker Compose
 | Deliverable | Where |
 |---|---|
 | Source code, build and run instructions | this README, [`src/`](src) |
-| **Architecture diagram** (open in a browser) | **[`docs/architecture.html`](docs/architecture.html)** |
+| **Architecture diagram** (download and open in a browser; Mermaid overview renders on GitHub in `docs/ARCHITECTURE.md`) | **[`docs/architecture.html`](docs/architecture.html)** |
 | Key decisions and trade-offs | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
 | Automated tests | [Automated tests](#7-automated-tests), [`src/test/`](src/test) |
 | Original specification (reference only) | [`docs/SPECIFICATION.md`](docs/SPECIFICATION.md) |
@@ -29,8 +29,11 @@ each other; PostgreSQL is the single source of truth and the job queue. A job th
 worker (crash, pause, network partition) is recovered when its lease expires, and fencing tokens
 stop a stale worker from overwriting newer state. Execution is **at-least-once**.
 
-**Diagram:** open [`docs/architecture.html`](docs/architecture.html) in any browser (double-click the
-file after cloning; no server or installation needed). Design decisions, trade-offs and limitations:
+**Diagram:** a Mermaid overview renders directly on GitHub in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#2-architecture-diagram). For the detailed interactive
+diagram, download or clone the repository and open [`docs/architecture.html`](docs/architecture.html)
+in any browser (double-click the file; no server or installation needed). GitHub shows that file
+as source code, not as a diagram. Design decisions, trade-offs and limitations:
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## 2. Prerequisites
@@ -63,7 +66,7 @@ copy [`.env.example`](.env.example) and fill the four required values with new r
 
 **Windows PowerShell**
 ```powershell
-git clone <repository-url> distributed-job-processor
+git clone https://github.com/RaniHassan/distributed-job-processor.git distributed-job-processor
 cd distributed-job-processor
 Copy-Item .env.example .env
 $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
@@ -76,7 +79,7 @@ $lines = Get-Content .env | ForEach-Object {
 
 **macOS / Linux (Bash)**
 ```bash
-git clone <repository-url> distributed-job-processor
+git clone https://github.com/RaniHassan/distributed-job-processor.git distributed-job-processor
 cd distributed-job-processor
 cp .env.example .env
 for var in POSTGRES_PASSWORD JWT_SECRET SEED_USER_PASSWORD SEED_ADMIN_PASSWORD; do
@@ -357,7 +360,7 @@ validation, JWT handling, the worker pool, heartbeat and runner logic, and metri
 | | |
 |---|---|
 | Command | `./mvnw clean verify` (Windows: `.\mvnw.cmd clean verify`) |
-| Result | **445 tests, 0 failures, 0 errors, 0 skipped** — 249 unit + 196 integration, about 3 minutes |
+| Result | **445 tests, 0 failures, 0 errors, 0 skipped** — 249 unit + 196 integration, about 3–5 minutes |
 | Environment | Windows 11, JDK 21.0.11, Docker 29.6.2 (Docker Desktop), PostgreSQL 17 via Testcontainers |
 | Stability | Full suite green in consecutive runs; timing-sensitive classes (`DatabaseOutageIT`, stress, distributed and race tests) repeated 3–5 times without failure |
 

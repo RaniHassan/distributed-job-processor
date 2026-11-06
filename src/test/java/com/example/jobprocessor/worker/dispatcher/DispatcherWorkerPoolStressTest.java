@@ -29,7 +29,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.locks.LockSupport;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -182,7 +181,13 @@ class DispatcherWorkerPoolStressTest {
     private void runnerFinishesAfter(int maxMicros) {
         doAnswer(invocation -> {
             if (maxMicros > 0) {
-                LockSupport.parkNanos(TimeUnit.MICROSECONDS.toNanos(ThreadLocalRandom.current().nextInt(maxMicros + 1)));
+                // Busy-wait instead of parkNanos: on Windows a sub-millisecond park rounds up to the
+                // timer tick (~15 ms), which turned 0–200 µs of work into 15 ms and broke the time budget.
+                long until = System.nanoTime()
+                        + TimeUnit.MICROSECONDS.toNanos(ThreadLocalRandom.current().nextInt(maxMicros + 1));
+                while (System.nanoTime() < until) {
+                    Thread.onSpinWait();
+                }
             }
             inFlight.decrementAndGet();
             finished.incrementAndGet();
