@@ -27,6 +27,13 @@ public class TestRows {
         return OffsetDateTime.now(ZoneOffset.UTC);
     }
 
+    /** Empties the job tables (users are kept), for tests that need to know every job in the database. */
+    public void deleteAllJobs() {
+        jdbc.update("DELETE FROM idempotency_keys");
+        jdbc.update("DELETE FROM job_attempts");
+        jdbc.update("DELETE FROM jobs");
+    }
+
     public UUID insertUser() {
         return insertUser("user-" + UUID.randomUUID(), "USER");
     }

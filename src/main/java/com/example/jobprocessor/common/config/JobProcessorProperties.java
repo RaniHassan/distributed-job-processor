@@ -9,6 +9,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
@@ -47,9 +48,15 @@ public record JobProcessorProperties(
         return worker.cancellationCheckInterval().compareTo(lease.heartbeatInterval()) < 0;
     }
 
+    /**
+     * @param instanceId stable name of this instance (e.g. the container name); a random suffix is
+     *                   added per process start to form the worker id stored on claimed jobs
+     */
     public record Worker(
             @Min(1) @Max(256) int threads,
-            @NotNull Duration cancellationCheckInterval) {
+            @NotNull Duration cancellationCheckInterval,
+            @NotBlank @Pattern(regexp = "[A-Za-z0-9._-]{1,100}",
+                    message = "must be 1-100 characters of letters, digits, '.', '_' or '-'") String instanceId) {
 
         @AssertTrue(message = "must be positive")
         public boolean isCancellationCheckIntervalPositive() {
@@ -57,7 +64,8 @@ public record JobProcessorProperties(
         }
     }
 
-    public record Dispatcher(@NotNull Duration pollInterval) {
+    /** @param enabled whether this instance claims and executes jobs (the API works either way) */
+    public record Dispatcher(boolean enabled, @NotNull Duration pollInterval) {
 
         @AssertTrue(message = "must be positive")
         public boolean isPollIntervalPositive() {

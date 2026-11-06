@@ -5,7 +5,10 @@ jobprocessor:
   worker:
     threads: 5
     cancellation-check-interval: 100ms
+    instance-id: test
   dispatcher:
+    # Off so API tests see stable job states; processing tests enable it in their own context.
+    enabled: false
     poll-interval: 100ms
   lease:
     duration: 2s

@@ -68,7 +68,9 @@ jobprocessor:
   worker:
     threads: 5
     cancellation-check-interval: 500ms
+    instance-id: ${INSTANCE_ID:${HOSTNAME:local}}
   dispatcher:
+    enabled: true
     poll-interval: 1s
   lease:
     duration: 30s

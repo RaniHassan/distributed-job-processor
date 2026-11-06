@@ -27,8 +27,8 @@ public final class TestProperties {
 
     public static JobProcessorProperties create(boolean failureInjectionEnabled) {
         return new JobProcessorProperties(
-                new Worker(5, Duration.ofMillis(500)),
-                new Dispatcher(Duration.ofSeconds(1)),
+                new Worker(5, Duration.ofMillis(500), "unit-test"),
+                new Dispatcher(true, Duration.ofSeconds(1)),
                 new Lease(Duration.ofSeconds(30), Duration.ofSeconds(10)),
                 new Recovery(Duration.ofSeconds(5)),
                 new Retry(3, List.of(Duration.ofSeconds(5), Duration.ofSeconds(10), Duration.ofSeconds(20)), 0.2),

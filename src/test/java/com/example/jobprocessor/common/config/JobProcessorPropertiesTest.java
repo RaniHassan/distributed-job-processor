@@ -32,6 +32,8 @@ class JobProcessorPropertiesTest {
 
             assertThat(p.worker().threads()).isEqualTo(5);
             assertThat(p.worker().cancellationCheckInterval()).isEqualTo(Duration.ofMillis(500));
+            assertThat(p.worker().instanceId()).isNotBlank();
+            assertThat(p.dispatcher().enabled()).isTrue();
             assertThat(p.dispatcher().pollInterval()).isBetween(Duration.ofMillis(500), Duration.ofSeconds(1));
             assertThat(p.lease().duration()).isEqualTo(Duration.ofSeconds(30));
             assertThat(p.lease().heartbeatInterval()).isEqualTo(Duration.ofSeconds(10));
@@ -73,6 +75,18 @@ class JobProcessorPropertiesTest {
 
             assertThat(printed).doesNotContain("0123456789abcdef").contains("secret=******");
         });
+    }
+
+    @Test
+    void instanceIdComesFromTheEnvironment() {
+        runner.withPropertyValues("INSTANCE_ID=app-7")
+                .run(context -> assertThat(context.getBean(JobProcessorProperties.class).worker().instanceId())
+                        .isEqualTo("app-7"));
+    }
+
+    @Test
+    void rejectsInstanceIdWithUnsafeCharacters() {
+        assertBindingFails("instanceId", "jobprocessor.worker.instance-id=app 1;drop");
     }
 
     @Test
