@@ -52,7 +52,9 @@ class JobProcessorApplicationIT {
     @Test
     void testProfileUsesShortTimings() {
         assertThat(properties.lease().duration()).isEqualTo(Duration.ofSeconds(2));
-        assertThat(properties.simulation().maxDuration()).isLessThanOrEqualTo(Duration.ofSeconds(2));
+        assertThat(properties.lease().heartbeatInterval()).isEqualTo(Duration.ofMillis(500));
+        // Longer than the lease on purpose, so heartbeats must keep long jobs alive.
+        assertThat(properties.simulation().maxDuration()).isEqualTo(Duration.ofSeconds(6));
         assertThat(properties.simulation().failureInjectionEnabled()).isTrue();
     }
 

@@ -34,6 +34,7 @@ class JobProcessorPropertiesTest {
             assertThat(p.worker().cancellationCheckInterval()).isEqualTo(Duration.ofMillis(500));
             assertThat(p.worker().instanceId()).isNotBlank();
             assertThat(p.dispatcher().enabled()).isTrue();
+            assertThat(p.recovery().enabled()).isTrue();
             assertThat(p.dispatcher().pollInterval()).isBetween(Duration.ofMillis(500), Duration.ofSeconds(1));
             assertThat(p.lease().duration()).isEqualTo(Duration.ofSeconds(30));
             assertThat(p.lease().heartbeatInterval()).isEqualTo(Duration.ofSeconds(10));

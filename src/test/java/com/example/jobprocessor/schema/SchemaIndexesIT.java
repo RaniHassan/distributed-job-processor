@@ -87,6 +87,20 @@ class SchemaIndexesIT {
                 .contains("idx_jobs_expired_lease");
     }
 
+    /** The Recovery Manager's exact query: oldest expired lease first, one row, skip locked. */
+    @Test
+    void recoveryClaimQueryUsesExpiredLeaseIndexWithoutSorting() {
+        assertThat(plan("""
+                SELECT id, status, worker_id, fencing_token, retry_count, max_retries
+                FROM jobs
+                WHERE status IN ('RUNNING', 'CANCEL_REQUESTED') AND lease_until < now()
+                ORDER BY lease_until
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED"""))
+                .contains("idx_jobs_expired_lease")
+                .doesNotContain("Sort");
+    }
+
     @Test
     void ownerListingUsesOwnerIndexWithoutSorting() {
         assertThat(plan("""

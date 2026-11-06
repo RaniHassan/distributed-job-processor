@@ -76,6 +76,7 @@ jobprocessor:
     duration: 30s
     heartbeat-interval: 10s
   recovery:
+    enabled: true
     poll-interval: 5s
   retry:
     max-retries: 3

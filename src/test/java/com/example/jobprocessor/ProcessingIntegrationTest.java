@@ -10,14 +10,14 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 
 /**
- * Like {@link ApiIntegrationTest} but with the Dispatcher running, so jobs are claimed and
- * executed by real worker threads. Uses its own Spring context and database container, so it
+ * Like {@link ApiIntegrationTest} but with the Dispatcher and Recovery Manager running, so jobs
+ * are claimed, executed, heartbeated and recovered by the real background threads. Uses its own Spring context and database container, so it
  * never processes jobs created by the API tests.
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = "jobprocessor.dispatcher.enabled=true")
+        properties = {"jobprocessor.dispatcher.enabled=true", "jobprocessor.recovery.enabled=true"})
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @Import({TestcontainersConfiguration.class, TestUsers.class, TestRows.class})

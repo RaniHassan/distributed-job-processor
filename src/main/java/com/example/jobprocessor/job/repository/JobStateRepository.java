@@ -2,8 +2,12 @@ package com.example.jobprocessor.job.repository;
 
 import com.example.jobprocessor.job.domain.AttemptStatus;
 import com.example.jobprocessor.job.domain.JobStatus;
+import java.sql.PreparedStatement;
 import java.time.Duration;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -123,6 +127,90 @@ public class JobStateRepository {
                 """, status.name(), errorMessage, jobId, fencingToken);
     }
 
+    // ---- leases (README §11) ------------------------------------------------------------------
+
+    /**
+     * Heartbeat: extends the lease of a RUNNING job for its current owner only. A CANCEL_REQUESTED
+     * job is deliberately not renewed, so a worker that does not stop is cut off by lease expiry.
+     */
+    public int renewLease(UUID jobId, String workerId, long fencingToken, Duration lease) {
+        return jdbc.update("""
+                UPDATE jobs
+                SET lease_until = now() + make_interval(secs => CAST(? AS double precision)), heartbeat_at = now()
+                WHERE id = ? AND worker_id = ? AND fencing_token = ? AND status = 'RUNNING'
+                """, lease.toMillis() / 1000.0, jobId, workerId, fencingToken);
+    }
+
+    /** The job's status if this exact ownership generation still holds it. */
+    public Optional<JobStatus> statusIfOwned(UUID jobId, String workerId, long fencingToken) {
+        return jdbc.query("SELECT status FROM jobs WHERE id = ? AND worker_id = ? AND fencing_token = ?",
+                        (rs, i) -> JobStatus.valueOf(rs.getString("status")), jobId, workerId, fencingToken)
+                .stream().findFirst();
+    }
+
+    /** Which of the given (job, token) generations owned by {@code workerId} have a cancellation request. */
+    public Set<UUID> cancellationRequested(String workerId, List<UUID> jobIds, List<Long> fencingTokens) {
+        return new HashSet<>(jdbc.query(connection -> {
+            PreparedStatement statement = connection.prepareStatement("""
+                    SELECT j.id FROM jobs j
+                    JOIN unnest(?::uuid[], ?::bigint[]) AS owned(id, token)
+                      ON j.id = owned.id AND j.fencing_token = owned.token
+                    WHERE j.worker_id = ? AND j.status = 'CANCEL_REQUESTED'
+                    """);
+            statement.setArray(1, connection.createArrayOf("uuid", jobIds.toArray()));
+            statement.setArray(2, connection.createArrayOf("bigint", fencingTokens.toArray()));
+            statement.setString(3, workerId);
+            return statement;
+        }, (rs, i) -> rs.getObject("id", UUID.class)));
+    }
+
+    // ---- recovery (README §13) ----------------------------------------------------------------
+
+    /**
+     * Locks the job whose lease expired longest ago. SKIP LOCKED keeps concurrent Recovery Managers
+     * from taking the same job, and PostgreSQL re-checks the WHERE clause after acquiring the lock,
+     * so a lease renewed in the meantime is no longer selected.
+     */
+    public Optional<ExpiredLease> lockNextExpiredLease() {
+        return jdbc.query("""
+                        SELECT id, status, worker_id, fencing_token, retry_count, max_retries
+                        FROM jobs
+                        WHERE status IN ('RUNNING', 'CANCEL_REQUESTED') AND lease_until < now()
+                        ORDER BY lease_until
+                        LIMIT 1
+                        FOR UPDATE SKIP LOCKED
+                        """,
+                        (rs, i) -> new ExpiredLease(rs.getObject("id", UUID.class), JobStatus.valueOf(rs.getString("status")),
+                                rs.getString("worker_id"), rs.getLong("fencing_token"), rs.getInt("retry_count"),
+                                rs.getInt("max_retries")))
+                .stream().findFirst();
+    }
+
+    /** RUNNING -> PENDING for another attempt: consumes one retry and clears ownership. */
+    public int requeue(UUID jobId, String workerId, long fencingToken, Duration delay, String errorMessage) {
+        return jdbc.update("""
+                UPDATE jobs
+                SET status = 'PENDING', retry_count = retry_count + 1,
+                    next_retry_at = now() + make_interval(secs => CAST(? AS double precision)),
+                    error_message = ?, worker_id = NULL, lease_until = NULL, heartbeat_at = NULL
+                WHERE id = ? AND worker_id = ? AND fencing_token = ? AND status = 'RUNNING'
+                """, delay.toMillis() / 1000.0, errorMessage, jobId, workerId, fencingToken);
+    }
+
+    /** CANCEL_REQUESTED -> CANCELLED for the given ownership generation; clears ownership. */
+    public int confirmCancelled(UUID jobId, String workerId, long fencingToken) {
+        return jdbc.update("""
+                UPDATE jobs
+                SET status = 'CANCELLED', finished_at = now(),
+                    worker_id = NULL, lease_until = NULL, heartbeat_at = NULL
+                WHERE id = ? AND worker_id = ? AND fencing_token = ? AND status = 'CANCEL_REQUESTED'
+                """, jobId, workerId, fencingToken);
+    }
+
     public record ClaimRow(UUID jobId, long fencingToken, String payloadJson) {
+    }
+
+    public record ExpiredLease(UUID jobId, JobStatus status, String workerId, long fencingToken,
+                               int retryCount, int maxRetries) {
     }
 }

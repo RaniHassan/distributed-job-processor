@@ -32,10 +32,11 @@ public class SimulatedJobExecutor {
     }
 
     /**
-     * @throws InterruptedException if the worker thread is interrupted; the job's outcome is then unknown
+     * @param control checked before every slice; lets the job stop at the next slice boundary
+     * @throws InterruptedException if the job is stopped or its thread interrupted; the outcome is then unknown
      * @throws RetryableException, NonRetryableException or another exception when the simulation fails
      */
-    public void execute(ClaimedJob job) throws InterruptedException {
+    public void execute(ClaimedJob job, ExecutionControl control) throws InterruptedException {
         SimulationSpec spec;
         try {
             spec = specParser.parse(job.payload());
@@ -46,7 +47,7 @@ public class SimulatedJobExecutor {
         Duration total = spec.duration() != null ? spec.duration() : randomDuration();
         Duration failAt = failurePoint(spec, job.attemptNumber());
 
-        work(failAt != null && failAt.compareTo(total) < 0 ? failAt : total);
+        work(failAt != null && failAt.compareTo(total) < 0 ? failAt : total, control);
         if (failAt != null) {
             throw failure(spec.failureMode());
         }
@@ -77,10 +78,11 @@ public class SimulatedJobExecutor {
         };
     }
 
-    private void work(Duration duration) throws InterruptedException {
+    private void work(Duration duration, ExecutionControl control) throws InterruptedException {
         long deadline = System.nanoTime() + duration.toNanos();
         long remaining;
         while ((remaining = deadline - System.nanoTime()) > 0) {
+            control.checkpoint();
             TimeUnit.NANOSECONDS.sleep(Math.min(remaining, slice.toNanos()));
         }
     }

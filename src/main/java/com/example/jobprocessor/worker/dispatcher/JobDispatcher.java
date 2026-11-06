@@ -102,6 +102,8 @@ public class JobDispatcher implements SmartLifecycle {
         int started = 0;
         while (pool.tryAcquireSlot()) {
             Optional<ClaimedJob> claimed;
+            // Taken before the claim is sent, so the worker's local lease deadline is never later than lease_until.
+            long leaseStart = System.nanoTime();
             try {
                 claimed = lifecycle.claimNext(identity.workerId());
             } catch (RuntimeException e) {
@@ -113,16 +115,16 @@ public class JobDispatcher implements SmartLifecycle {
                 pool.releaseSlot();
                 break;
             }
-            if (submit(claimed.get())) {
+            if (submit(claimed.get(), leaseStart)) {
                 started++;
             }
         }
         return started;
     }
 
-    private boolean submit(ClaimedJob job) {
+    private boolean submit(ClaimedJob job, long leaseStart) {
         try {
-            pool.execute(() -> runner.run(job));
+            pool.execute(() -> runner.run(job, leaseStart));
             return true;
         } catch (RejectedExecutionException e) {
             pool.releaseSlot();

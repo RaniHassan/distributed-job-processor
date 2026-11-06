@@ -93,7 +93,8 @@ public record JobProcessorProperties(
         }
     }
 
-    public record Recovery(@NotNull Duration pollInterval) {
+    /** @param enabled whether this instance runs the Recovery Manager (safe to run on every instance) */
+    public record Recovery(boolean enabled, @NotNull Duration pollInterval) {
 
         @AssertTrue(message = "must be positive")
         public boolean isPollIntervalPositive() {

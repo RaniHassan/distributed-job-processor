@@ -25,32 +25,32 @@ class SimulatedJobExecutorTest {
 
     @Test
     void successfulRunTakesTheRequestedDuration() throws Exception {
-        long elapsed = timed(() -> executor.execute(job(1, Map.of("durationMs", 300))));
+        long elapsed = timed(() -> run(executor, job(1, Map.of("durationMs", 300))));
 
         assertThat(elapsed).isBetween(280L, 1500L);
     }
 
     @Test
     void transientOnceFailsOnlyTheFirstAttempt() throws Exception {
-        assertThatThrownBy(() -> executor.execute(job(1, Map.of("durationMs", 50, "failureMode", "TRANSIENT_ONCE"))))
+        assertThatThrownBy(() -> run(executor, job(1, Map.of("durationMs", 50, "failureMode", "TRANSIENT_ONCE"))))
                 .isInstanceOf(RetryableException.class);
-        executor.execute(job(2, Map.of("durationMs", 50, "failureMode", "TRANSIENT_ONCE")));
+        run(executor, job(2, Map.of("durationMs", 50, "failureMode", "TRANSIENT_ONCE")));
     }
 
     @Test
     void transientAlwaysFailsEveryAttempt() {
         for (int attempt = 1; attempt <= 3; attempt++) {
             int n = attempt;
-            assertThatThrownBy(() -> executor.execute(job(n, Map.of("durationMs", 50, "failureMode", "TRANSIENT_ALWAYS"))))
+            assertThatThrownBy(() -> run(executor, job(n, Map.of("durationMs", 50, "failureMode", "TRANSIENT_ALWAYS"))))
                     .isInstanceOf(RetryableException.class);
         }
     }
 
     @Test
     void permanentAndUnexpectedFailuresUseTheirCategories() {
-        assertThatThrownBy(() -> executor.execute(job(1, Map.of("durationMs", 50, "failureMode", "PERMANENT"))))
+        assertThatThrownBy(() -> run(executor, job(1, Map.of("durationMs", 50, "failureMode", "PERMANENT"))))
                 .isInstanceOf(NonRetryableException.class);
-        assertThatThrownBy(() -> executor.execute(job(1, Map.of("durationMs", 50, "failureMode", "UNEXPECTED_ALWAYS"))))
+        assertThatThrownBy(() -> run(executor, job(1, Map.of("durationMs", 50, "failureMode", "UNEXPECTED_ALWAYS"))))
                 .isInstanceOf(IllegalStateException.class);
     }
 
@@ -58,7 +58,7 @@ class SimulatedJobExecutorTest {
     void failureHappensAfterTheRequestedDelay() {
         long elapsed = timed(() -> {
             try {
-                executor.execute(job(1, Map.of("durationMs", 2000, "failureMode", "PERMANENT", "failAfterMs", 250)));
+                run(executor, job(1, Map.of("durationMs", 2000, "failureMode", "PERMANENT", "failAfterMs", 250)));
             } catch (NonRetryableException expected) {
                 return;
             }
@@ -73,7 +73,7 @@ class SimulatedJobExecutorTest {
         AtomicReference<Throwable> outcome = new AtomicReference<>();
         Thread worker = new Thread(() -> {
             try {
-                executor.execute(job(1, Map.of("durationMs", 60_000)));
+                run(executor, job(1, Map.of("durationMs", 60_000)));
             } catch (Throwable t) {
                 outcome.set(t);
             }
@@ -103,9 +103,36 @@ class SimulatedJobExecutorTest {
         SimulatedJobExecutor productionLike = new SimulatedJobExecutor(
                 new SimulationSpecParser(TestProperties.create(false)), TestProperties.create(false));
 
-        assertThatThrownBy(() -> productionLike.execute(job(1, Map.of("failureMode", "PERMANENT"))))
+        assertThatThrownBy(() -> run(productionLike, job(1, Map.of("failureMode", "PERMANENT"))))
                 .isInstanceOf(NonRetryableException.class)
                 .hasMessageContaining("Invalid job payload");
+    }
+
+    @Test
+    void stopsAtTheNextCheckpointWhenToldTo() {
+        java.util.concurrent.atomic.AtomicInteger checkpoints = new java.util.concurrent.atomic.AtomicInteger();
+        ExecutionControl stopAfterThree = () -> {
+            if (checkpoints.incrementAndGet() > 3) {
+                throw new InterruptedException("stop requested");
+            }
+        };
+
+        long elapsed = timed(() -> {
+            try {
+                executor.execute(job(1, Map.of("durationMs", 60_000)), stopAfterThree);
+            } catch (InterruptedException expected) {
+                return;
+            }
+            throw new AssertionError("expected the job to stop");
+        });
+
+        // Slices are 500 ms (TestProperties): three full slices, then the fourth checkpoint stops it.
+        assertThat(checkpoints.get()).isEqualTo(4);
+        assertThat(elapsed).isBetween(1400L, 3000L);
+    }
+
+    private static void run(SimulatedJobExecutor executor, ClaimedJob job) throws InterruptedException {
+        executor.execute(job, ExecutionControl.UNCONTROLLED);
     }
 
     private static ClaimedJob job(int attempt, Map<String, Object> simulation) {

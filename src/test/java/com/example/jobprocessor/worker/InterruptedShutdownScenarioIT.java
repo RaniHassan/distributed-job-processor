@@ -10,6 +10,8 @@ import com.example.jobprocessor.common.config.JobProcessorProperties.Dispatcher;
 import com.example.jobprocessor.common.config.JobProcessorProperties.Shutdown;
 import com.example.jobprocessor.common.config.JobProcessorProperties.Worker;
 import com.example.jobprocessor.job.service.JobLifecycleService;
+import com.example.jobprocessor.job.service.RecoveredJob;
+import com.example.jobprocessor.recovery.service.RecoveryManager;
 import com.example.jobprocessor.worker.dispatcher.JobDispatcher;
 import com.example.jobprocessor.worker.execution.JobRunner;
 import com.example.jobprocessor.worker.pool.WorkerIdentity;
@@ -25,15 +27,15 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 /**
- * Reproduces the Docker scenario from Phase 4 verification: an instance is shut down while its
- * workers are mid-job. The dispatcher stops, the pool's drain timeout runs out, workers are
- * interrupted and record nothing, so the jobs stay RUNNING under the stopped worker until their
- * leases expire. That expired-lease state is exactly what the Recovery Manager (Phase 5) must
- * take over; this test pins it down so recovery can be tested from a real shutdown rather than
- * hand-written rows.
+ * Reproduces the Docker scenario from Phase 4 verification end to end: an instance is shut down
+ * while its workers are mid-job. The dispatcher stops, the pool's drain timeout runs out, workers
+ * are interrupted and record nothing, so the jobs stay RUNNING under the stopped worker until
+ * their leases expire. The Recovery Manager then takes them over and a second instance completes
+ * them as a new ownership generation.
  *
- * <p>A private dispatcher and pool are built here (two threads, 300 ms drain timeout) so they can
- * be stopped without affecting the shared application context, whose own dispatcher is disabled.
+ * <p>Private dispatchers and pools are built here ("instances" with their own worker ids) so they
+ * can be stopped without affecting the shared application context, whose own dispatcher and
+ * recovery scheduler are disabled. Heartbeats come from the context's {@code LeaseHeartbeat}.
  */
 @ApiIntegrationTest
 class InterruptedShutdownScenarioIT {
@@ -53,6 +55,8 @@ class InterruptedShutdownScenarioIT {
     private TestRows rows;
     @Autowired
     private JdbcTemplate jdbc;
+    @Autowired
+    private RecoveryManager recoveryManager;
 
     private WorkerPool pool;
     private JobDispatcher dispatcher;
@@ -80,7 +84,7 @@ class InterruptedShutdownScenarioIT {
     }
 
     @Test
-    void shutdownMidJobLeavesRunningJobsWithExpiringLeasesForRecovery() {
+    void jobsInterruptedByShutdownAreRecoveredAndCompletedByAnotherInstance() {
         UUID owner = rows.insertUser();
         // Both run for the 2s test maximum; the 300 ms drain timeout guarantees interruption.
         UUID first = rows.job(owner).set("payload", "{\"simulation\":{\"durationMs\":2000}}")
@@ -124,8 +128,46 @@ class InterruptedShutdownScenarioIT {
         // jobs become exactly the input of the Recovery Manager's expired-lease query.
         await().atMost(Duration.ofSeconds(5)).until(() -> jdbc.queryForList(RECOVERY_CANDIDATES, UUID.class).size() == 2);
         assertThat(jdbc.queryForList(RECOVERY_CANDIDATES, UUID.class)).containsExactlyInAnyOrder(first, second);
-        assertThat(jdbc.queryForObject("SELECT status FROM jobs WHERE id = ?", String.class, first))
-                .as("nothing recovers them before Phase 5").isEqualTo("RUNNING");
+
+        // Recovery (on any instance) takes them over: attempt ABANDONED, job back to PENDING.
+        List<RecoveredJob> recovered = recoveryManager.recoverExpiredLeases();
+        assertThat(recovered).extracting(RecoveredJob::jobId).containsExactlyInAnyOrder(first, second);
+        assertThat(recovered).allSatisfy(r -> {
+            assertThat(r.outcome()).isEqualTo(RecoveredJob.Outcome.REQUEUED);
+            assertThat(r.previousWorkerId()).isEqualTo(identity.workerId());
+        });
+
+        // A second instance processes all three jobs; the recovered ones as a new generation.
+        String stoppedWorker = identity.workerId();
+        startSecondInstance();
+        await().atMost(Duration.ofSeconds(20)).until(() ->
+                jdbc.queryForObject("SELECT count(*) FROM jobs WHERE status = 'COMPLETED'", Integer.class) == 3);
+
+        for (UUID id : List.of(first, second)) {
+            assertThat(jdbc.queryForMap("SELECT retry_count, fencing_token FROM jobs WHERE id = ?", id))
+                    .containsEntry("retry_count", 1).containsEntry("fencing_token", 2L);
+            List<Map<String, Object>> attempts =
+                    jdbc.queryForList("SELECT * FROM job_attempts WHERE job_id = ? ORDER BY attempt_number", id);
+            assertThat(attempts).extracting(a -> a.get("status")).containsExactly("ABANDONED", "SUCCEEDED");
+            assertThat(attempts.get(0)).containsEntry("worker_id", stoppedWorker);
+            assertThat(attempts.get(1)).containsEntry("worker_id", identity.workerId());
+        }
+        assertThat(jdbc.queryForMap("SELECT retry_count, fencing_token FROM jobs WHERE id = ?", waiting))
+                .containsEntry("retry_count", 0).containsEntry("fencing_token", 1L);
+    }
+
+    private void startSecondInstance() {
+        JobProcessorProperties p = properties;
+        JobProcessorProperties second = new JobProcessorProperties(
+                new Worker(3, p.worker().cancellationCheckInterval(), "second-instance"),
+                new Dispatcher(true, Duration.ofMillis(50)),
+                p.lease(), p.recovery(), p.retry(), p.simulation(),
+                p.shutdown(), p.idempotency(), p.api(), p.security());
+        identity = new WorkerIdentity(second);
+        pool = new WorkerPool(second);
+        dispatcher = new JobDispatcher(lifecycle, pool, runner, identity, second);
+        pool.start();
+        dispatcher.start();
     }
 
     private int runningJobsOf(String workerId) {

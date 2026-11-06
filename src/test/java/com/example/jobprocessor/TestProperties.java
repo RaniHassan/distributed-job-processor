@@ -30,7 +30,7 @@ public final class TestProperties {
                 new Worker(5, Duration.ofMillis(500), "unit-test"),
                 new Dispatcher(true, Duration.ofSeconds(1)),
                 new Lease(Duration.ofSeconds(30), Duration.ofSeconds(10)),
-                new Recovery(Duration.ofSeconds(5)),
+                new Recovery(true, Duration.ofSeconds(5)),
                 new Retry(3, List.of(Duration.ofSeconds(5), Duration.ofSeconds(10), Duration.ofSeconds(20)), 0.2),
                 new Simulation(Duration.ofMinutes(1), Duration.ofMinutes(5), failureInjectionEnabled),
                 new Shutdown(Duration.ofSeconds(30)),
