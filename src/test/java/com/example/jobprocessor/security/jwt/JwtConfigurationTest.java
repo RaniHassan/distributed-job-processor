@@ -105,6 +105,6 @@ class JwtConfigurationTest {
         JobProcessorProperties p = properties;
         return new JobProcessorProperties(p.worker(), p.dispatcher(), p.lease(), p.recovery(), p.retry(), p.simulation(),
                 p.shutdown(), p.idempotency(), p.api(),
-                new Security(new JwtSettings(secret, TestProperties.JWT_ISSUER, Duration.ofMinutes(15))));
+                new Security(new JwtSettings(secret, TestProperties.JWT_ISSUER, Duration.ofMinutes(15))), p.metrics());
     }
 }

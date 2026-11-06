@@ -16,8 +16,9 @@ public final class RolePermissions {
 
     static {
         PERMISSIONS.put(Role.USER, EnumSet.of(Permission.JOB_CREATE, Permission.JOB_READ, Permission.JOB_CANCEL));
-        // ADMIN has the same job permissions and no ownership bypass (approved decision D2).
-        PERMISSIONS.put(Role.ADMIN, EnumSet.of(Permission.JOB_CREATE, Permission.JOB_READ, Permission.JOB_CANCEL));
+        // ADMIN: the same job permissions, no ownership bypass, plus operational metrics (approved decision D2).
+        PERMISSIONS.put(Role.ADMIN, EnumSet.of(Permission.JOB_CREATE, Permission.JOB_READ, Permission.JOB_CANCEL,
+                Permission.METRICS_READ));
     }
 
     private RolePermissions() {

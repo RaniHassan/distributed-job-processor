@@ -79,6 +79,18 @@ class JobProcessorPropertiesTest {
     }
 
     @Test
+    void structuredJsonLogsAreUsedOutsideDevAndTest() {
+        runner.run(context -> assertThat(context.getEnvironment().getProperty("logging.structured.format.console"))
+                .isEqualTo("ecs"));
+        for (String profile : new String[] {"dev", "test"}) {
+            runner.withPropertyValues("spring.profiles.active=" + profile, "POSTGRES_PASSWORD=x",
+                            "SEED_USER_PASSWORD=x", "SEED_ADMIN_PASSWORD=x")
+                    .run(context -> assertThat(context.getEnvironment().getProperty("logging.structured.format.console"))
+                            .as(profile + " keeps the readable format").isNull());
+        }
+    }
+
+    @Test
     void instanceIdComesFromTheEnvironment() {
         runner.withPropertyValues("INSTANCE_ID=app-7")
                 .run(context -> assertThat(context.getBean(JobProcessorProperties.class).worker().instanceId())

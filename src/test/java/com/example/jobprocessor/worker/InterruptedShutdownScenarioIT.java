@@ -71,7 +71,7 @@ class InterruptedShutdownScenarioIT {
                 new Dispatcher(true, Duration.ofMillis(50)),
                 p.lease(), p.recovery(), p.retry(), p.simulation(),
                 new Shutdown(Duration.ofMillis(300)),
-                p.idempotency(), p.api(), p.security());
+                p.idempotency(), p.api(), p.security(), p.metrics());
         identity = new WorkerIdentity(instance);
         pool = new WorkerPool(instance);
         dispatcher = new JobDispatcher(lifecycle, pool, runner, identity, instance);
@@ -162,7 +162,7 @@ class InterruptedShutdownScenarioIT {
                 new Worker(3, p.worker().cancellationCheckInterval(), "second-instance"),
                 new Dispatcher(true, Duration.ofMillis(50)),
                 p.lease(), p.recovery(), p.retry(), p.simulation(),
-                p.shutdown(), p.idempotency(), p.api(), p.security());
+                p.shutdown(), p.idempotency(), p.api(), p.security(), p.metrics());
         identity = new WorkerIdentity(second);
         pool = new WorkerPool(second);
         dispatcher = new JobDispatcher(lifecycle, pool, runner, identity, second);

@@ -6,6 +6,7 @@ import com.example.jobprocessor.common.config.JobProcessorProperties.Dispatcher;
 import com.example.jobprocessor.common.config.JobProcessorProperties.Idempotency;
 import com.example.jobprocessor.common.config.JobProcessorProperties.JwtSettings;
 import com.example.jobprocessor.common.config.JobProcessorProperties.Lease;
+import com.example.jobprocessor.common.config.JobProcessorProperties.Metrics;
 import com.example.jobprocessor.common.config.JobProcessorProperties.Recovery;
 import com.example.jobprocessor.common.config.JobProcessorProperties.Retry;
 import com.example.jobprocessor.common.config.JobProcessorProperties.Security;
@@ -36,6 +37,7 @@ public final class TestProperties {
                 new Shutdown(Duration.ofSeconds(30)),
                 new Idempotency(Duration.ofHours(24), Duration.ofHours(1)),
                 new Api(DataSize.ofKilobytes(64), 32),
-                new Security(new JwtSettings(JWT_SECRET, JWT_ISSUER, Duration.ofMinutes(15))));
+                new Security(new JwtSettings(JWT_SECRET, JWT_ISSUER, Duration.ofMinutes(15))),
+                new Metrics(Duration.ofSeconds(15)));
     }
 }

@@ -52,17 +52,27 @@ management:
   endpoints:
     web:
       exposure:
-        include: health
+        # /actuator/metrics and /actuator/prometheus require METRICS_READ (ADMIN only); health is public.
+        include: health,metrics,prometheus
   endpoint:
     health:
       show-details: never
       probes:
         enabled: true
+      group:
+        readiness:
+          # Stop routing traffic to an instance that cannot reach PostgreSQL. Liveness deliberately
+          # excludes the database, so a database outage does not restart every instance.
+          include: readinessState,db
+  metrics:
+    tags:
+      application: ${spring.application.name}
+      instance: ${jobprocessor.worker.instance-id}
 
 logging:
   pattern:
-    # Request trace id from TraceIdFilter, shown in every log line of the request.
-    correlation: "[%X{traceId:-}] "
+    # Request trace id (TraceIdFilter) or job id (workers, recovery) in every plain-text log line.
+    correlation: "[%X{traceId:-}%X{jobId:-}] "
 
 jobprocessor:
   worker:
@@ -99,3 +109,18 @@ jobprocessor:
       secret: ${JWT_SECRET}
       issuer: distributed-job-processor
       access-token-ttl: 15m
+  metrics:
+    # Cluster-wide job counts come from PostgreSQL on this interval, not on every scrape.
+    queue-gauge-refresh-interval: 15s
+
+---
+# Structured JSON logs (Elastic Common Schema) everywhere except local development and tests,
+# where the readable pattern is kept. MDC values (traceId, jobId, attempt, workerId) become fields.
+spring:
+  config:
+    activate:
+      on-profile: "!dev & !test"
+logging:
+  structured:
+    format:
+      console: ecs

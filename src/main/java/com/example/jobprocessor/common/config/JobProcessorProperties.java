@@ -33,7 +33,8 @@ public record JobProcessorProperties(
         @Valid @NotNull Shutdown shutdown,
         @Valid @NotNull Idempotency idempotency,
         @Valid @NotNull Api api,
-        @Valid @NotNull Security security) {
+        @Valid @NotNull Security security,
+        @Valid @NotNull Metrics metrics) {
 
     /**
      * Heartbeats only renew RUNNING jobs, so a cancelling worker must notice the request well
@@ -164,6 +165,14 @@ public record JobProcessorProperties(
     }
 
     public record Security(@Valid @NotNull JwtSettings jwt) {
+    }
+
+    public record Metrics(@NotNull Duration queueGaugeRefreshInterval) {
+
+        @AssertTrue(message = "must be positive")
+        public boolean isQueueGaugeRefreshIntervalPositive() {
+            return queueGaugeRefreshInterval == null || isPositive(queueGaugeRefreshInterval);
+        }
     }
 
     /** HS256 access-token settings. The secret is never printed by {@link #toString()}. */

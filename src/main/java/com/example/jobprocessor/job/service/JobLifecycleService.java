@@ -10,6 +10,7 @@ import com.example.jobprocessor.job.repository.JobStateRepository;
 import com.example.jobprocessor.job.repository.JobStateRepository.ClaimRow;
 import com.example.jobprocessor.job.repository.JobStateRepository.ExpiredLease;
 import com.example.jobprocessor.job.repository.JobStateRepository.OwnedJob;
+import com.example.jobprocessor.monitoring.metrics.JobMetrics;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -22,6 +23,7 @@ import java.util.UUID;
 import java.util.function.IntSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -48,13 +50,15 @@ public class JobLifecycleService {
     private final JobStateRepository jobStates;
     private final RetryPolicy retryPolicy;
     private final ObjectMapper objectMapper;
+    private final JobMetrics metrics;
     private final Duration leaseDuration;
 
     public JobLifecycleService(JobStateRepository jobStates, RetryPolicy retryPolicy, ObjectMapper objectMapper,
-                               JobProcessorProperties properties) {
+                               JobMetrics metrics, JobProcessorProperties properties) {
         this.jobStates = jobStates;
         this.retryPolicy = retryPolicy;
         this.objectMapper = objectMapper;
+        this.metrics = metrics;
         this.leaseDuration = properties.lease().duration();
     }
 
@@ -71,7 +75,9 @@ public class JobLifecycleService {
         }
         ClaimRow row = claimed.get();
         jobStates.insertRunningAttempt(row.jobId(), row.fencingToken(), workerId);
-        log.info("Job claimed: jobId={} workerId={} fencingToken={}", row.jobId(), workerId, row.fencingToken());
+        metrics.jobClaimed(row.queueWait());
+        log.info("Job claimed: jobId={} workerId={} fencingToken={} queueWait={}ms",
+                row.jobId(), workerId, row.fencingToken(), row.queueWait().toMillis());
         return Optional.of(new ClaimedJob(row.jobId(), workerId, row.fencingToken(), parsePayload(row.payloadJson())));
     }
 
@@ -86,6 +92,10 @@ public class JobLifecycleService {
     /** Successful execution: COMPLETED, or CANCELLED if cancellation was requested meanwhile. */
     @Transactional
     public RecordedOutcome complete(ClaimedJob job) {
+        return counted(recordCompletion(job));
+    }
+
+    private RecordedOutcome recordCompletion(ClaimedJob job) {
         Optional<OwnedJob> owned = jobStates.lockOwned(job.jobId(), job.workerId(), job.fencingToken());
         if (owned.isEmpty()) {
             return ownershipLost(job, "completion");
@@ -109,6 +119,10 @@ public class JobLifecycleService {
      */
     @Transactional
     public RecordedOutcome fail(ClaimedJob job, FailureType type, String message) {
+        return counted(recordFailure(job, type, message));
+    }
+
+    private RecordedOutcome recordFailure(ClaimedJob job, FailureType type, String message) {
         String error = truncate("[" + type + "] " + message);
         Optional<OwnedJob> owned = jobStates.lockOwned(job.jobId(), job.workerId(), job.fencingToken());
         if (owned.isEmpty()) {
@@ -139,9 +153,15 @@ public class JobLifecycleService {
     public RecordedOutcome confirmCancelled(ClaimedJob job) {
         Optional<OwnedJob> owned = jobStates.lockOwned(job.jobId(), job.workerId(), job.fencingToken());
         if (owned.isPresent() && owned.get().status() == JobStatus.CANCEL_REQUESTED) {
-            return cancel(job, null);
+            return counted(cancel(job, null));
         }
-        return ownershipLost(job, "cancellation");
+        return counted(ownershipLost(job, "cancellation"));
+    }
+
+    /** Counts the recorded result once this transaction commits. */
+    private RecordedOutcome counted(RecordedOutcome outcome) {
+        metrics.resultRecorded(outcome);
+        return outcome;
     }
 
     /**
@@ -230,6 +250,12 @@ public class JobLifecycleService {
             return Optional.empty();
         }
         ExpiredLease lease = next.get();
+        try (MDC.MDCCloseable ignored = MDC.putCloseable("jobId", lease.jobId().toString())) {
+            return Optional.of(recover(lease));
+        }
+    }
+
+    private RecoveredJob recover(ExpiredLease lease) {
         if (jobStates.closeAttempt(lease.jobId(), lease.fencingToken(), AttemptStatus.ABANDONED, ABANDONED_ATTEMPT) != 1) {
             log.warn("No open attempt for recovered job: jobId={} fencingToken={}", lease.jobId(), lease.fencingToken());
         }
@@ -254,7 +280,8 @@ public class JobLifecycleService {
         log.warn("Lease expired, job recovered: jobId={} previousWorker={} fencingToken={} outcome={} retryCount={} retryDelay={}",
                 lease.jobId(), lease.workerId(), lease.fencingToken(), recovered.outcome(), recovered.retryCount(),
                 recovered.retryDelay());
-        return Optional.of(recovered);
+        metrics.leaseExpired(recovered.outcome());
+        return recovered;
     }
 
     private static RecoveredJob recovered(ExpiredLease lease, RecoveredJob.Outcome outcome, int retryCount, Duration delay) {

@@ -24,6 +24,8 @@ import com.example.jobprocessor.job.repository.JobRepository;
 import com.example.jobprocessor.job.repository.JobStateRepository;
 import com.example.jobprocessor.job.simulation.InvalidJobPayloadException;
 import com.example.jobprocessor.job.simulation.SimulationSpecParser;
+import com.example.jobprocessor.monitoring.metrics.JobMetrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.example.jobprocessor.security.authorization.AuthenticatedUser;
 import com.example.jobprocessor.security.authorization.CurrentUser;
 import com.example.jobprocessor.user.domain.Role;
@@ -66,7 +68,8 @@ class JobManagementServiceTest {
     @BeforeEach
     void setUp() {
         service = new JobManagementService(jobRepository, attemptRepository, jobStates, jobCreator, new RequestHasher(),
-                new SimulationSpecParser(TestProperties.create(false)), currentUser, TestProperties.create(false));
+                new SimulationSpecParser(TestProperties.create(false)), currentUser,
+                new JobMetrics(new SimpleMeterRegistry()), TestProperties.create(false));
         when(currentUser.get()).thenReturn(new AuthenticatedUser(OWNER, "alice", Role.USER));
         when(jobRepository.findById(JOB_ID)).thenReturn(Optional.of(job));
     }

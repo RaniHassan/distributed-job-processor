@@ -11,7 +11,9 @@ import com.example.jobprocessor.ProcessingIntegrationTest;
 import com.example.jobprocessor.TestRows;
 import com.example.jobprocessor.TestUsers;
 import com.example.jobprocessor.TestUsers.TestUser;
+import com.example.jobprocessor.monitoring.metrics.JobQueueGauges;
 import com.example.jobprocessor.user.domain.Role;
+import io.micrometer.core.instrument.MeterRegistry;
 import com.example.jobprocessor.worker.pool.WorkerIdentity;
 import com.example.jobprocessor.worker.pool.WorkerPool;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -51,6 +53,10 @@ class JobProcessingIT {
     private WorkerPool pool;
     @Autowired
     private WorkerIdentity identity;
+    @Autowired
+    private MeterRegistry meters;
+    @Autowired
+    private JobQueueGauges queueGauges;
 
     private TestUser alice;
     private String aliceAuth;
@@ -164,6 +170,48 @@ class JobProcessingIT {
                 .containsEntry("error_message", "[TRANSIENT] Simulated transient failure");
         assertThat(jdbc.queryForList("SELECT status FROM job_attempts WHERE job_id = ? ORDER BY attempt_number", String.class, id))
                 .containsExactly("FAILED", "SUCCEEDED");
+    }
+
+    /** README §22: the lifecycle of one job (created, failed once, retried, completed) shows up in the metrics. */
+    @Test
+    void processingIsReflectedInTheMetrics() throws Exception {
+        double created = counter("jobs.submitted");
+        double retried = counter("jobs.retried");
+        double completed = counter("jobs.completed");
+        long attempts = timerCount("job.processing.duration");
+        long claims = timerCount("job.queue.wait.duration");
+
+        MvcResult result = mvc.perform(post("/api/v1/jobs").header(HttpHeaders.AUTHORIZATION, aliceAuth)
+                        .header("Idempotency-Key", "metrics-1").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"payload\":{\"simulation\":{\"durationMs\":500,\"failureMode\":\"TRANSIENT_ONCE\"}}}"))
+                .andExpect(status().isAccepted()).andReturn();
+        UUID id = UUID.fromString(json.readTree(result.getResponse().getContentAsString()).get("id").asText());
+        await().atMost(TIMEOUT).until(() -> "COMPLETED".equals(jobStatus(id)));
+
+        await().atMost(Duration.ofSeconds(2)).untilAsserted(() -> {
+            assertThat(counter("jobs.submitted") - created).isEqualTo(1);
+            assertThat(counter("jobs.retried") - retried).isEqualTo(1);
+            assertThat(counter("jobs.completed") - completed).isEqualTo(1);
+            assertThat(timerCount("job.processing.duration") - attempts).as("one failed and one successful attempt").isEqualTo(2);
+            assertThat(timerCount("job.queue.wait.duration") - claims).as("claimed twice").isEqualTo(2);
+        });
+        assertThat(meters.get("job.processing.duration").tag("outcome", "failed").timer().count()).isPositive();
+
+        insertJob("{\"durationMs\":3000}");
+        await().atMost(TIMEOUT).until(() -> "RUNNING".equals(jdbc.queryForObject(
+                "SELECT max(status) FROM jobs WHERE status = 'RUNNING'", String.class)));
+        queueGauges.refresh();
+        assertThat(meters.get("jobs.running").gauge().value()).isEqualTo(1);
+        assertThat(meters.get("worker.pool.active.threads").gauge().value()).isEqualTo(1);
+        assertThat(meters.get("worker.pool.capacity").gauge().value()).isEqualTo(5);
+    }
+
+    private double counter(String name) {
+        return meters.get(name).counters().stream().mapToDouble(io.micrometer.core.instrument.Counter::count).sum();
+    }
+
+    private long timerCount(String name) {
+        return meters.find(name).timers().stream().mapToLong(io.micrometer.core.instrument.Timer::count).sum();
     }
 
     /**

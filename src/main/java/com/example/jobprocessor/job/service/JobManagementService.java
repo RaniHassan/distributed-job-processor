@@ -15,6 +15,7 @@ import com.example.jobprocessor.job.repository.JobAttemptRepository;
 import com.example.jobprocessor.job.repository.JobRepository;
 import com.example.jobprocessor.job.repository.JobStateRepository;
 import com.example.jobprocessor.job.simulation.SimulationSpecParser;
+import com.example.jobprocessor.monitoring.metrics.JobMetrics;
 import com.example.jobprocessor.security.authorization.AuthenticatedUser;
 import com.example.jobprocessor.security.authorization.CurrentUser;
 import java.util.List;
@@ -45,12 +46,13 @@ public class JobManagementService {
     private final RequestHasher requestHasher;
     private final SimulationSpecParser simulationParser;
     private final CurrentUser currentUser;
+    private final JobMetrics metrics;
     private final JobProcessorProperties properties;
 
     public JobManagementService(JobRepository jobRepository, JobAttemptRepository attemptRepository,
                                 JobStateRepository jobStates, IdempotentJobCreator jobCreator,
                                 RequestHasher requestHasher, SimulationSpecParser simulationParser,
-                                CurrentUser currentUser, JobProcessorProperties properties) {
+                                CurrentUser currentUser, JobMetrics metrics, JobProcessorProperties properties) {
         this.jobRepository = jobRepository;
         this.attemptRepository = attemptRepository;
         this.jobStates = jobStates;
@@ -58,6 +60,7 @@ public class JobManagementService {
         this.requestHasher = requestHasher;
         this.simulationParser = simulationParser;
         this.currentUser = currentUser;
+        this.metrics = metrics;
         this.properties = properties;
     }
 
@@ -73,6 +76,7 @@ public class JobManagementService {
 
         return switch (outcome) {
             case Created created -> {
+                metrics.jobCreated();
                 log.info("Job created: jobId={} ownerId={}", created.job().getId(), user.id());
                 yield new CreateJobResult(created.job(), false);
             }
@@ -115,6 +119,7 @@ public class JobManagementService {
         CancelOutcome outcome = switch (status) {
             case PENDING -> {
                 transition(jobId, JobStatus.PENDING, JobStatus.CANCELLED, jobStates::cancelPending);
+                metrics.jobCancelledBeforeStart();
                 log.info("Job cancelled: jobId={} ownerId={}", jobId, ownerId);
                 yield CancelOutcome.CANCELLED;
             }

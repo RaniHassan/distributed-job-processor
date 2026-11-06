@@ -185,11 +185,41 @@ class AuthApiIT {
         mvc.perform(get("/actuator/health")).andExpect(status().isOk());
     }
 
+    /** D2: operational metrics (JSON and Prometheus) are for ADMIN only; other management endpoints are not exposed. */
     @Test
-    void otherManagementEndpointsAreNotExposedEvenWithAToken() throws Exception {
-        String bearer = users.bearer(alice);
-        mvc.perform(get("/actuator/env").header(HttpHeaders.AUTHORIZATION, bearer)).andExpect(status().isNotFound());
-        mvc.perform(get("/actuator/metrics").header(HttpHeaders.AUTHORIZATION, bearer)).andExpect(status().isNotFound());
+    void metricsAreAvailableToAdminsOnly() throws Exception {
+        String userBearer = users.bearer(alice);
+        String adminBearer = users.bearer(users.create(Role.ADMIN));
+
+        for (String endpoint : new String[] {"/actuator/metrics", "/actuator/metrics/jobs.submitted", "/actuator/prometheus"}) {
+            mvc.perform(get(endpoint)).andExpect(status().isUnauthorized());
+            mvc.perform(get(endpoint).header(HttpHeaders.AUTHORIZATION, userBearer))
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.errorCode").value("FORBIDDEN"));
+        }
+
+        String scrape = mvc.perform(get("/actuator/prometheus").header(HttpHeaders.AUTHORIZATION, adminBearer))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CONTENT_TYPE, org.hamcrest.Matchers.startsWith("text/plain")))
+                .andReturn().getResponse().getContentAsString();
+        String labels = "{application=\"distributed-job-processor\",instance=\"test\"}";
+        assertThat(scrape)
+                .contains("# TYPE jobs_submitted_total counter", "jobs_submitted_total" + labels)
+                .contains("# TYPE jobs_pending gauge", "jobs_pending" + labels)
+                .contains("worker_pool_active_threads" + labels, "worker_pool_queue_size" + labels)
+                .contains("job_queue_wait_duration_seconds_count" + labels);
+
+        mvc.perform(get("/actuator/metrics").header(HttpHeaders.AUTHORIZATION, adminBearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.names").value(org.hamcrest.Matchers.hasItems(
+                        "jobs.submitted", "jobs.completed", "jobs.failed", "jobs.cancelled", "jobs.retried",
+                        "jobs.pending", "jobs.running", "job.queue.wait.duration",
+                        "worker.pool.active.threads", "worker.pool.queue.size", "worker.pool.capacity")));
+        mvc.perform(get("/actuator/metrics/jobs.submitted").header(HttpHeaders.AUTHORIZATION, adminBearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.availableTags[?(@.tag == 'instance')].values[0]").value("test"));
+
+        mvc.perform(get("/actuator/env").header(HttpHeaders.AUTHORIZATION, adminBearer)).andExpect(status().isNotFound());
     }
 
     // ---- helpers ------------------------------------------------------------------------------

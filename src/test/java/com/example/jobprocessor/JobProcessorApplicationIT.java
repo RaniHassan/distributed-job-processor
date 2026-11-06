@@ -7,6 +7,8 @@ import java.time.Duration;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.actuate.health.CompositeHealth;
+import org.springframework.boot.actuate.health.HealthEndpoint;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -26,6 +28,9 @@ class JobProcessorApplicationIT {
 
     @Autowired
     private TestRestTemplate restTemplate;
+
+    @Autowired
+    private HealthEndpoint healthEndpoint;
 
     @Test
     void connectsToPostgreSql() {
@@ -66,6 +71,15 @@ class JobProcessorApplicationIT {
             assertThat(response.getStatusCode()).as(path).isEqualTo(HttpStatus.OK);
             assertThat(response.getBody()).as(path).contains("\"status\":\"UP\"");
         }
+    }
+
+    /** Readiness depends on PostgreSQL (stop routing traffic); liveness does not (no restart storms). */
+    @Test
+    void readinessIncludesTheDatabaseButLivenessDoesNot() {
+        assertThat(healthEndpoint.healthForPath("readiness")).isInstanceOfSatisfying(CompositeHealth.class,
+                readiness -> assertThat(readiness.getComponents()).containsKeys("db", "readinessState"));
+        assertThat(healthEndpoint.healthForPath("liveness")).isInstanceOfSatisfying(CompositeHealth.class,
+                liveness -> assertThat(liveness.getComponents()).containsOnlyKeys("livenessState"));
     }
 
     @Test

@@ -102,6 +102,11 @@ public class WorkerPool implements SmartLifecycle {
         return threads;
     }
 
+    public int queueSize() {
+        ThreadPoolExecutor current = executor;
+        return current == null ? 0 : current.getQueue().size();
+    }
+
     @Override
     public synchronized void stop() {
         if (!running) {

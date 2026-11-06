@@ -159,7 +159,7 @@ class SimulatedJobExecutorTest {
         ShortRangeParser(JobProcessorProperties base) {
             super(new JobProcessorProperties(base.worker(), base.dispatcher(), base.lease(), base.recovery(), base.retry(),
                     new JobProcessorProperties.Simulation(Duration.ofMillis(10), Duration.ofSeconds(60), true),
-                    base.shutdown(), base.idempotency(), base.api(), base.security()));
+                    base.shutdown(), base.idempotency(), base.api(), base.security(), base.metrics()));
         }
     }
 }

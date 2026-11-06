@@ -107,7 +107,7 @@ class JobDispatcherTest {
         JobProcessorProperties base = TestProperties.create(false);
         JobProcessorProperties disabled = new JobProcessorProperties(base.worker(),
                 new JobProcessorProperties.Dispatcher(false, Duration.ofMillis(10)), base.lease(), base.recovery(),
-                base.retry(), base.simulation(), base.shutdown(), base.idempotency(), base.api(), base.security());
+                base.retry(), base.simulation(), base.shutdown(), base.idempotency(), base.api(), base.security(), base.metrics());
         JobDispatcher off = new JobDispatcher(lifecycle, pool, runner, identity, disabled);
 
         off.start();

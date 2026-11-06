@@ -5,10 +5,12 @@ import com.example.jobprocessor.job.lifecycle.FailureType;
 import com.example.jobprocessor.job.service.ClaimedJob;
 import com.example.jobprocessor.job.service.JobLifecycleService;
 import com.example.jobprocessor.job.service.RecordedOutcome;
+import com.example.jobprocessor.monitoring.metrics.JobMetrics;
 import java.time.Duration;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Component;
 
 /**
@@ -31,29 +33,44 @@ public class JobRunner {
 
     private static final Logger log = LoggerFactory.getLogger(JobRunner.class);
 
+    public static final String MDC_JOB_ID = "jobId";
+    static final String MDC_ATTEMPT = "attempt";
+    static final String MDC_WORKER_ID = "workerId";
+
     private final SimulatedJobExecutor executor;
     private final JobLifecycleService lifecycle;
     private final ActiveExecutions executions;
+    private final JobMetrics metrics;
     private final long leaseNanos;
 
     public JobRunner(SimulatedJobExecutor executor, JobLifecycleService lifecycle, ActiveExecutions executions,
-                     JobProcessorProperties properties) {
+                     JobMetrics metrics, JobProcessorProperties properties) {
         this.executor = executor;
         this.lifecycle = lifecycle;
         this.executions = executions;
+        this.metrics = metrics;
         this.leaseNanos = properties.lease().duration().toNanos();
     }
 
     /**
+     * Logs of the whole execution carry {@code jobId}, {@code attempt} and {@code workerId} in the
+     * MDC, so one job can be followed across instances in structured logs.
+     *
      * @param leaseStartNanos {@link System#nanoTime()} taken just before the claim was sent; the
      *                        local lease deadline is measured from it
      */
     public void run(ClaimedJob job, long leaseStartNanos) {
         ActiveExecution execution = executions.register(job, leaseStartNanos + leaseNanos);
+        MDC.put(MDC_JOB_ID, job.jobId().toString());
+        MDC.put(MDC_ATTEMPT, String.valueOf(job.attemptNumber()));
+        MDC.put(MDC_WORKER_ID, job.workerId());
         try {
             execute(job, execution);
         } finally {
             executions.unregister(execution);
+            MDC.remove(MDC_JOB_ID);
+            MDC.remove(MDC_ATTEMPT);
+            MDC.remove(MDC_WORKER_ID);
             Thread.interrupted(); // never leak an interrupt into the pool thread's next job
         }
     }
@@ -65,6 +82,7 @@ public class JobRunner {
             executor.execute(job, execution);
         } catch (InterruptedException e) {
             finishExecution(execution);
+            metrics.attemptFinished(elapsedSince(started), "stopped");
             StopReason reason = execution.stopReason();
             if (reason == StopReason.CANCELLATION_REQUESTED) {
                 // Cooperative cancellation (README §9.1): the worker stopped on purpose and says so.
@@ -77,6 +95,7 @@ public class JobRunner {
             return;
         } catch (Exception e) {
             finishExecution(execution);
+            metrics.attemptFinished(elapsedSince(started), "failed");
             FailureType type = FailureClassifier.classify(e);
             if (type == FailureType.UNEXPECTED) {
                 log.error("Job failed unexpectedly: jobId={} attempt={}", job.jobId(), job.attemptNumber(), e);
@@ -87,9 +106,14 @@ public class JobRunner {
             return;
         }
         finishExecution(execution);
-        log.info("Job execution finished: jobId={} attempt={} took={}ms", job.jobId(), job.attemptNumber(),
-                Duration.ofNanos(System.nanoTime() - started).toMillis());
+        Duration took = elapsedSince(started);
+        metrics.attemptFinished(took, "succeeded");
+        log.info("Job execution finished: jobId={} attempt={} took={}ms", job.jobId(), job.attemptNumber(), took.toMillis());
         record(job, "completion", () -> lifecycle.complete(job));
+    }
+
+    private static Duration elapsedSince(long startNanos) {
+        return Duration.ofNanos(System.nanoTime() - startNanos);
     }
 
     /**

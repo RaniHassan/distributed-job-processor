@@ -22,8 +22,10 @@ class RolePermissionsTest {
     }
 
     @Test
-    void adminHasTheSameJobPermissions() {
-        assertThat(RolePermissions.of(Role.ADMIN)).isEqualTo(RolePermissions.of(Role.USER));
+    void adminHasTheSameJobPermissionsPlusMetricsOnly() {
+        assertThat(RolePermissions.of(Role.ADMIN)).containsAll(RolePermissions.of(Role.USER)).contains(Permission.METRICS_READ);
+        assertThat(RolePermissions.of(Role.ADMIN)).hasSize(RolePermissions.of(Role.USER).size() + 1);
+        assertThat(RolePermissions.of(Role.USER)).doesNotContain(Permission.METRICS_READ);
     }
 
     @Test

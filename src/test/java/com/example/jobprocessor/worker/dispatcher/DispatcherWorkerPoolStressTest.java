@@ -194,7 +194,7 @@ class DispatcherWorkerPoolStressTest {
         JobProcessorProperties base = TestProperties.create(false);
         JobProcessorProperties properties = new JobProcessorProperties(base.worker(),
                 new JobProcessorProperties.Dispatcher(true, pollInterval), base.lease(), base.recovery(), base.retry(),
-                base.simulation(), base.shutdown(), base.idempotency(), base.api(), base.security());
+                base.simulation(), base.shutdown(), base.idempotency(), base.api(), base.security(), base.metrics());
         return new JobDispatcher(lifecycle, pool, runner, identity, properties);
     }
 }

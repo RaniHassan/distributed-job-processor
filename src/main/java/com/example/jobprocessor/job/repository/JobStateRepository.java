@@ -4,8 +4,10 @@ import com.example.jobprocessor.job.domain.AttemptStatus;
 import com.example.jobprocessor.job.domain.JobStatus;
 import java.sql.PreparedStatement;
 import java.time.Duration;
+import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -74,10 +76,11 @@ public class JobStateRepository {
                             started_at = COALESCE(j.started_at, now())
                         FROM candidate
                         WHERE j.id = candidate.id
-                        RETURNING j.id, j.fencing_token, j.payload::text AS payload
+                        RETURNING j.id, j.fencing_token, j.payload::text AS payload,
+                                  (EXTRACT(EPOCH FROM now() - j.next_retry_at) * 1000)::bigint AS queue_wait_ms
                         """,
                         (rs, i) -> new ClaimRow(rs.getObject("id", UUID.class), rs.getLong("fencing_token"),
-                                rs.getString("payload")),
+                                rs.getString("payload"), Duration.ofMillis(rs.getLong("queue_wait_ms"))),
                         workerId, lease.toMillis() / 1000.0)
                 .stream().findFirst();
     }
@@ -223,7 +226,21 @@ public class JobStateRepository {
                 """, jobId, workerId, fencingToken);
     }
 
-    public record ClaimRow(UUID jobId, long fencingToken, String payloadJson) {
+    /** Number of jobs per not-yet-finished status, across the whole cluster. */
+    public Map<JobStatus, Long> countActiveJobs() {
+        Map<JobStatus, Long> counts = new EnumMap<>(JobStatus.class);
+        jdbc.query("""
+                SELECT status, count(*) AS jobs FROM jobs
+                WHERE status IN ('PENDING', 'RUNNING', 'CANCEL_REQUESTED')
+                GROUP BY status
+                """, rs -> {
+            counts.put(JobStatus.valueOf(rs.getString("status")), rs.getLong("jobs"));
+        });
+        return counts;
+    }
+
+    /** @param queueWait time between the job becoming eligible ({@code next_retry_at}) and this claim */
+    public record ClaimRow(UUID jobId, long fencingToken, String payloadJson, Duration queueWait) {
     }
 
     public record OwnedJob(JobStatus status, int retryCount, int maxRetries) {

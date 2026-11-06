@@ -53,6 +53,8 @@ class DistributedProcessingIT {
     private ActiveExecutions executions;
     @Autowired
     private WorkerIdentity identity;
+    @Autowired
+    private io.micrometer.core.instrument.MeterRegistry meters;
 
     private TestUser alice;
 
@@ -112,6 +114,8 @@ class DistributedProcessingIT {
     /** A crashed instance leaves an owned job whose lease runs out; this instance recovers and runs it. */
     @Test
     void jobOfACrashedInstanceIsRecoveredAndCompletedHere() {
+        double requeuedBefore = meters.find("lease.expiration").tag("outcome", "REQUEUED").counters().stream()
+                .mapToDouble(io.micrometer.core.instrument.Counter::count).sum();
         UUID id = rows.job(alice.id()).set("payload", "{\"simulation\":{\"durationMs\":500}}").running()
                 .set("worker_id", "crashed-instance-1").set("lease_until", TestRows.now().plusSeconds(1)).insert();
         rows.attempt(id, 1).set("worker_id", "crashed-instance-1").insert();
@@ -123,6 +127,8 @@ class DistributedProcessingIT {
         assertThat(attempts).extracting(a -> a.get("status")).containsExactly("ABANDONED", "SUCCEEDED");
         assertThat(attempts.get(0)).containsEntry("worker_id", "crashed-instance-1");
         assertThat(attempts.get(1)).containsEntry("worker_id", identity.workerId());
+        assertThat(meters.get("lease.expiration").tag("outcome", "REQUEUED").counter().count() - requeuedBefore)
+                .as("recovery is visible in lease_expiration_total").isEqualTo(1);
     }
 
     @Test

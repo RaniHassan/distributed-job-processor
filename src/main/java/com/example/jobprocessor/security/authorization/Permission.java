@@ -7,5 +7,7 @@ package com.example.jobprocessor.security.authorization;
 public enum Permission {
     JOB_CREATE,
     JOB_READ,
-    JOB_CANCEL
+    JOB_CANCEL,
+    /** Operational metrics: /actuator/metrics and the /actuator/prometheus scrape endpoint. */
+    METRICS_READ
 }

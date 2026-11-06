@@ -17,6 +17,8 @@ import com.example.jobprocessor.job.lifecycle.FailureType;
 import com.example.jobprocessor.job.service.ClaimedJob;
 import com.example.jobprocessor.job.service.JobLifecycleService;
 import com.example.jobprocessor.job.service.RecordedOutcome;
+import com.example.jobprocessor.monitoring.metrics.JobMetrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
@@ -29,13 +31,14 @@ class JobRunnerTest {
     private final SimulatedJobExecutor executor = mock(SimulatedJobExecutor.class);
     private final JobLifecycleService lifecycle = mock(JobLifecycleService.class);
     private final ActiveExecutions executions = new ActiveExecutions();
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
     private JobRunner runner;
 
     private final ClaimedJob job = new ClaimedJob(UUID.randomUUID(), "worker-1", 1, Map.of());
 
     @BeforeEach
     void setUp() {
-        runner = new JobRunner(executor, lifecycle, executions, TestProperties.create(false));
+        runner = new JobRunner(executor, lifecycle, executions, new JobMetrics(registry), TestProperties.create(false));
     }
 
     private void run() {
@@ -50,6 +53,26 @@ class JobRunnerTest {
 
         verify(lifecycle).complete(job);
         verify(lifecycle, never()).fail(any(), any(), any());
+        assertThat(registry.get("job.processing.duration").tag("outcome", "succeeded").timer().count()).isEqualTo(1);
+    }
+
+    @Test
+    void logsCarryTheJobContextOnlyWhileTheJobRuns() throws Exception {
+        AtomicReference<Map<String, String>> seen = new AtomicReference<>();
+        doAnswer(invocation -> {
+            seen.set(org.slf4j.MDC.getCopyOfContextMap());
+            return null;
+        }).when(executor).execute(eq(job), any());
+
+        run();
+
+        assertThat(seen.get())
+                .containsEntry("jobId", job.jobId().toString())
+                .containsEntry("attempt", "1")
+                .containsEntry("workerId", "worker-1");
+        Map<String, String> after = org.slf4j.MDC.getCopyOfContextMap();
+        assertThat(after == null ? Map.<String, String>of() : after)
+                .as("a pool thread's next job starts clean").doesNotContainKeys("jobId", "attempt", "workerId");
     }
 
     @Test
