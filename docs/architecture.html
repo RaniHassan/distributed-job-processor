@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Job Processor Architecture</title>
+<style>
+  :root {
+    --bg: #f6f7fb; --panel: #ffffff; --ink: #1f2937; --muted: #5b6474; --line: #d7dce5;
+    --api: #2563eb; --svc: #0f766e; --proc: #d97706; --bg-c: #7c3aed; --reg: #64748b; --db: #059669;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; display: flex; flex-direction: column; background: var(--bg); color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; padding: 14px 20px;
+    background: var(--panel); border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 18px; margin: 0; font-weight: 650; }
+  header p { margin: 0; color: var(--muted); font-size: 13px; flex: 1 1 320px; }
+  .toolbar { display: flex; gap: 6px; }
+  .toolbar button { font: inherit; font-size: 13px; padding: 6px 12px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--ink); border-radius: 8px; cursor: pointer; }
+  .toolbar button:hover { border-color: #9aa4b5; }
+  .toolbar .zoom { min-width: 56px; text-align: center; color: var(--muted); font-size: 13px; padding: 6px 0; }
+  #viewport { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; cursor: grab; }
+  #viewport.dragging { cursor: grabbing; }
+  #diagram { width: 100%; height: 100%; display: block; user-select: none; }
+  .hint { position: absolute; right: 16px; bottom: 12px; font-size: 12px; color: var(--muted);
+    background: rgba(255,255,255,.85); padding: 4px 10px; border-radius: 8px; border: 1px solid var(--line); }
+
+  /* diagram */
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .instbox { fill: #fbfcfe; stroke: #b8c1d1; stroke-width: 1.5; }
+  .insthead { fill: #eef1f7; }
+  .insttitle { font-size: 16px; font-weight: 650; fill: var(--ink); }
+  .instmeta { font-size: 12.5px; fill: var(--muted); }
+  .nbox { fill: var(--panel); stroke: #c9d0dc; stroke-width: 1.2; filter: drop-shadow(0 1px 1.5px rgba(16,24,40,.08)); }
+  .ntitle { font-size: 13.5px; font-weight: 650; fill: var(--ink); }
+  .ntitle.mono { font-size: 13px; } .ntitle.small { font-size: 12px; }
+  .nline { font-size: 12px; fill: var(--muted); }
+  .api .accent { fill: var(--api); } .svc .accent { fill: var(--svc); } .proc .accent { fill: var(--proc); }
+  .bg .accent { fill: var(--bg-c); } .reg .accent { fill: var(--reg); } .actor .accent { fill: #334155; }
+  .bg .nbox { fill: #faf7ff; stroke: #cdbdf3; }
+  .badge { fill: #ede7fd; } .badgetext { font-size: 10.5px; font-weight: 600; fill: var(--bg-c); }
+  .optional .nbox { fill: #fbfbfc; stroke: #8b93a3; stroke-dasharray: 7 5; filter: none; }
+  .note rect { fill: #fff8e6; stroke: #f0c36d; } .note text { font-size: 13px; fill: #6b4e0f; font-weight: 550; }
+  .edge { fill: none; stroke-width: 1.7; stroke-linejoin: round; }
+  .edge.http { stroke: #2563eb; stroke-width: 2; }
+  .edge.call { stroke: #475569; }
+  .edge.db { stroke: #059669; stroke-width: 2.3; }
+  .edge.bg { stroke: #7c3aed; stroke-dasharray: 6 4; }
+  .elabel rect { fill: #ffffff; stroke-width: 1; }
+  .elabel text { font-size: 11px; fill: var(--ink); }
+  .elabel.http rect { stroke: #bcd0fb; } .elabel.call rect { stroke: #cdd3dd; }
+  .elabel.db rect { stroke: #a9dfc9; } .elabel.bg rect { stroke: #d6c8f7; }
+  .dbbody { fill: #ecfdf5; stroke: #059669; stroke-width: 1.6; } .dbtop { fill: #d1fae5; stroke: #059669; stroke-width: 1.6; }
+  .dbtitle { font-size: 16px; font-weight: 650; fill: #064e3b; } .dbline { font-size: 12.5px; fill: #1f5f4a; }
+  .legendbox { fill: var(--panel); stroke: var(--line); } .legendtitle { font-size: 13px; font-weight: 650; fill: var(--ink); }
+  .legendtext { font-size: 12px; fill: var(--muted); }
+  .legendopt { fill: #fbfbfc; stroke: #8b93a3; stroke-dasharray: 5 3; }
+  .legendbg { fill: #faf7ff; stroke: #cdbdf3; }
+  @media print { header, .hint { display: none; } #viewport { position: static; height: auto; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Distributed Job Processor — Architecture</h1>
+  <p>Two of N identical Spring Boot instances sharing one PostgreSQL database. Component names are the actual classes.
+     Written explanation: <a href="ARCHITECTURE.md">ARCHITECTURE.md</a>.</p>
+  <div class="toolbar" role="group" aria-label="Zoom controls">
+    <button type="button" id="zoom-out" title="Zoom out (-)">−</button>
+    <span class="zoom" id="zoom-level">100%</span>
+    <button type="button" id="zoom-in" title="Zoom in (+)">+</button>
+    <button type="button" id="fit" title="Fit to screen (0)">Fit</button>
+    <button type="button" id="actual" title="Actual size (1)">100%</button>
+  </div>
+</header>
+<div id="viewport">
+<svg id="diagram" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1680 1230" role="img"
+     aria-label="Architecture diagram: client, optional load balancer, two application instances and the shared PostgreSQL database">
+<defs>
+<marker id="arrow-http" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/></marker>
+<marker id="arrow-call" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#475569"/></marker>
+<marker id="arrow-db" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#059669"/></marker>
+<marker id="arrow-bg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#7c3aed"/></marker>
+</defs>
+<g class="legend">
+<rect x="40" y="24" width="372" height="214" rx="12" class="legendbox"/>
+<text x="58" y="50" class="legendtitle">Legend</text>
+<path d="M58,76 L128,76" class="edge http" marker-end="url(#arrow-http)"/>
+<text x="142" y="80" class="legendtext">Synchronous HTTP request</text>
+<path d="M58,102 L128,102" class="edge call" marker-end="url(#arrow-call)"/>
+<text x="142" y="106" class="legendtext">Internal method call (same JVM)</text>
+<path d="M58,128 L128,128" class="edge db" marker-end="url(#arrow-db)"/>
+<text x="142" y="132" class="legendtext">Database access (SQL / JDBC / JPA)</text>
+<path d="M58,154 L128,154" class="edge bg" marker-end="url(#arrow-bg)"/>
+<text x="142" y="158" class="legendtext">Background / scheduled operation</text>
+<rect x="58" y="182" width="26" height="16" rx="4" class="legendopt"/>
+<text x="94" y="195" class="legendtext">Optional infrastructure (not in Compose)</text>
+<rect x="58" y="208" width="26" height="16" rx="4" class="legendbg"/>
+<text x="94" y="221" class="legendtext">Scheduled background component</text>
+</g>
+<g class="node actor">
+<rect x="760" y="30" width="160" height="58" rx="10" class="nbox"/>
+<rect x="760" y="30" width="6" height="58" rx="3" class="accent"/>
+<text x="776" y="54" class="ntitle">Client</text>
+<text x="776" y="71" class="nline">any HTTP client</text>
+</g>
+<g class="node optional">
+<rect x="560" y="140" width="560" height="84" rx="10" class="nbox"/>
+<text x="840" y="166" class="ntitle" text-anchor="middle">Load balancer — optional production infrastructure</text>
+<text x="840" y="186" class="nline" text-anchor="middle">Not part of the local Docker Compose setup. Locally the client calls</text>
+<text x="840" y="203" class="nline" text-anchor="middle">app-1 on localhost:8081 and app-2 on localhost:8082 directly.</text>
+</g>
+<path d="M840,88 L840,140" class="edge http" marker-end="url(#arrow-http)"/>
+<g class="note"><rect x="560" y="246" width="560" height="30" rx="15"/>
+<text x="840" y="266" text-anchor="middle">Instances never call each other — they coordinate only through PostgreSQL</text></g>
+<g class="instance">
+<rect x="40" y="300" width="760" height="620" rx="16" class="instbox"/>
+<rect x="40" y="300" width="760" height="40" rx="16" class="insthead"/>
+<rect x="40" y="324" width="760" height="16" class="insthead"/>
+<text x="58" y="326" class="insttitle">Application Instance 1</text>
+<text x="782" y="326" class="instmeta" text-anchor="end">same Spring Boot JAR · INSTANCE_ID=app-1 · :8081</text>
+</g>
+<g class="node api">
+<rect x="60" y="360" width="220" height="96" rx="10" class="nbox"/>
+<rect x="60" y="360" width="6" height="96" rx="3" class="accent"/>
+<text x="76" y="384" class="ntitle">REST API</text>
+<text x="76" y="401" class="nline">JobController · AuthController</text>
+<text x="76" y="418" class="nline">JWT validated locally (no DB)</text>
+<text x="76" y="435" class="nline">login reads users table</text>
+</g>
+<g class="node svc">
+<rect x="60" y="500" width="220" height="150" rx="10" class="nbox"/>
+<rect x="60" y="500" width="6" height="150" rx="3" class="accent"/>
+<text x="76" y="524" class="ntitle mono">JobManagementService</text>
+<text x="76" y="541" class="nline">client operations:</text>
+<text x="76" y="558" class="nline">create (idempotent) · get · list</text>
+<text x="76" y="575" class="nline">attempts · cancel</text>
+<text x="76" y="592" class="nline">@PreAuthorize permissions</text>
+<text x="76" y="609" class="nline">owner-scoped queries</text>
+</g>
+<g class="node bg">
+<rect x="316" y="360" width="190" height="96" rx="10" class="nbox"/>
+<rect x="316" y="360" width="6" height="96" rx="3" class="accent"/>
+<text x="332" y="384" class="ntitle mono">JobDispatcher</text>
+<text x="332" y="401" class="nline">scheduled · every 1 s</text>
+<text x="332" y="418" class="nline">claims only while a</text>
+<text x="332" y="435" class="nline">worker permit is free</text>
+</g>
+<g class="node proc">
+<rect x="552" y="360" width="208" height="96" rx="10" class="nbox"/>
+<rect x="552" y="360" width="6" height="96" rx="3" class="accent"/>
+<text x="568" y="384" class="ntitle mono">WorkerPool</text>
+<text x="568" y="401" class="nline">bounded: 5 threads · 5 permits</text>
+<text x="568" y="418" class="nline">JobRunner →</text>
+<text x="568" y="435" class="nline">SimulatedJobExecutor</text>
+</g>
+<g class="node reg">
+<rect x="552" y="500" width="208" height="70" rx="10" class="nbox"/>
+<rect x="552" y="500" width="6" height="70" rx="3" class="accent"/>
+<text x="568" y="524" class="ntitle mono">ActiveExecutions</text>
+<text x="568" y="541" class="nline">active execution registry</text>
+<text x="568" y="558" class="nline">(local to this JVM)</text>
+</g>
+<g class="node bg">
+<rect x="316" y="660" width="136" height="80" rx="10" class="nbox"/>
+<rect x="316" y="660" width="6" height="80" rx="3" class="accent"/>
+<text x="332" y="684" class="ntitle mono small">LeaseHeartbeat</text>
+<text x="332" y="701" class="nline">scheduled · 10 s</text>
+<text x="332" y="718" class="nline">renews leases</text>
+</g>
+<g class="node bg">
+<rect x="460" y="660" width="156" height="80" rx="10" class="nbox"/>
+<rect x="460" y="660" width="6" height="80" rx="3" class="accent"/>
+<text x="476" y="684" class="ntitle mono small">CancellationWatcher</text>
+<text x="476" y="701" class="nline">scheduled · 500 ms</text>
+<text x="476" y="718" class="nline">detects cancel requests</text>
+</g>
+<g class="node bg">
+<rect x="624" y="660" width="136" height="80" rx="10" class="nbox"/>
+<rect x="624" y="660" width="6" height="80" rx="3" class="accent"/>
+<text x="640" y="684" class="ntitle mono small">RecoveryManager</text>
+<text x="640" y="701" class="nline">scheduled · 5 s</text>
+<text x="640" y="718" class="nline">expired leases</text>
+</g>
+<g class="node svc">
+<rect x="316" y="800" width="444" height="96" rx="10" class="nbox"/>
+<rect x="316" y="800" width="6" height="96" rx="3" class="accent"/>
+<text x="332" y="824" class="ntitle mono">JobLifecycleService</text>
+<text x="332" y="841" class="nline">claimNext · complete · fail · confirmCancelled · releaseClaim</text>
+<text x="332" y="858" class="nline">renewLease · findCancellationRequests · recoverNextExpiredLease</text>
+<text x="332" y="875" class="nline">every write fenced by worker_id + fencing_token</text>
+</g>
+<path d="M170,456 L170,500" class="edge call" marker-end="url(#arrow-call)"/>
+<g class="elabel call">
+<rect x="126.03999999999999" y="468" width="87.92" height="20" rx="6"/>
+<text x="170" y="480" text-anchor="middle">method calls</text>
+</g>
+<path d="M506,408 L552,408" class="edge bg" marker-end="url(#arrow-bg)"/>
+<g class="elabel bg">
+<rect x="503.52" y="374" width="50.96" height="20" rx="6"/>
+<text x="529" y="386" text-anchor="middle">submit</text>
+</g>
+<path d="M316,420 L298,420 L298,860 L316,860" class="edge bg" marker-end="url(#arrow-bg)"/>
+<g class="elabel bg">
+<rect x="257.12" y="760" width="81.76" height="20" rx="6"/>
+<text x="298" y="772" text-anchor="middle">claimNext()</text>
+</g>
+<path d="M656,456 L656,500" class="edge call" marker-end="url(#arrow-call)"/>
+<g class="elabel call">
+<rect x="636.3199999999999" y="468" width="143.36" height="20" rx="6"/>
+<text x="708" y="480" text-anchor="middle">register / unregister</text>
+</g>
+<path d="M760,420 L782,420 L782,848 L760,848" class="edge call" marker-end="url(#arrow-call)"/>
+<g class="elabel call">
+<rect x="648.64" y="592" width="118.72000000000001" height="48" rx="6"/>
+<text x="708" y="604" text-anchor="middle">record result:</text>
+<text x="708" y="618" text-anchor="middle">complete · fail ·</text>
+<text x="708" y="632" text-anchor="middle">confirmCancelled</text>
+</g>
+<path d="M386,740 L386,800" class="edge bg" marker-end="url(#arrow-bg)"/>
+<g class="elabel bg">
+<rect x="342.04" y="752" width="87.92" height="20" rx="6"/>
+<text x="386" y="764" text-anchor="middle">renewLease()</text>
+</g>
+<path d="M538,740 L538,800" class="edge bg" marker-end="url(#arrow-bg)"/>
+<g class="elabel bg">
+<rect x="450.91999999999996" y="774" width="174.16000000000003" height="20" rx="6"/>
+<text x="538" y="786" text-anchor="middle">findCancellationRequests()</text>
+</g>
+<path d="M692,740 L692,800" class="edge bg" marker-end="url(#arrow-bg)"/>
+<g class="elabel bg">
+<rect x="608" y="752" width="168.00000000000003" height="20" rx="6"/>
+<text x="692" y="764" text-anchor="middle">recoverNextExpiredLease()</text>
+</g>
+<path d="M432,660 L580,570" class="edge bg" marker-end="url(#arrow-bg)"/>
+<g class="elabel bg">
+<rect x="444.96" y="608" width="94.08000000000001" height="20" rx="6"/>
+<text x="492" y="620" text-anchor="middle">requestStop()</text>
+</g>
+<path d="M570,660 L652,570" class="edge bg" marker-end="url(#arrow-bg)"/>
+<g class="elabel bg">
+<rect x="570.96" y="620" width="94.08000000000001" height="20" rx="6"/>
+<text x="618" y="632" text-anchor="middle">requestStop()</text>
+</g>
+<g class="instance">
+<rect x="880" y="300" width="760" height="620" rx="16" class="instbox"/>
+<rect x="880" y="300" width="760" height="40" rx="16" class="insthead"/>
+<rect x="880" y="324" width="760" height="16" class="insthead"/>
+<text x="898" y="326" class="insttitle">Application Instance 2</text>
+<text x="1622" y="326" class="instmeta" text-anchor="end">same Spring Boot JAR · INSTANCE_ID=app-2 · :8082</text>
+</g>
+<g class="node api">
+<rect x="900" y="360" width="220" height="96" rx="10" class="nbox"/>
+<rect x="900" y="360" width="6" height="96" rx="3" class="accent"/>
+<text x="916" y="384" class="ntitle">REST API</text>
+<text x="916" y="401" class="nline">JobController · AuthController</text>
+<text x="916" y="418" class="nline">JWT validated locally (no DB)</text>
+<text x="916" y="435" class="nline">login reads users table</text>
+</g>
+<g class="node svc">
+<rect x="900" y="500" width="220" height="150" rx="10" class="nbox"/>
+<rect x="900" y="500" width="6" height="150" rx="3" class="accent"/>
+<text x="916" y="524" class="ntitle mono">JobManagementService</text>
+<text x="916" y="541" class="nline">client operations:</text>
+<text x="916" y="558" class="nline">create (idempotent) · get · list</text>
+<text x="916" y="575" class="nline">attempts · cancel</text>
+<text x="916" y="592" class="nline">@PreAuthorize permissions</text>
+<text x="916" y="609" class="nline">owner-scoped queries</text>
+</g>
+<g class="node bg">
+<rect x="1156" y="360" width="190" height="96" rx="10" class="nbox"/>
+<rect x="1156" y="360" width="6" height="96" rx="3" class="accent"/>
+<text x="1172" y="384" class="ntitle mono">JobDispatcher</text>
+<text x="1172" y="401" class="nline">scheduled · every 1 s</text>
+<text x="1172" y="418" class="nline">claims only while a</text>
+<text x="1172" y="435" class="nline">worker permit is free</text>
+</g>
+<g class="node proc">
+<rect x="1392" y="360" width="208" height="96" rx="10" class="nbox"/>
+<rect x="1392" y="360" width="6" height="96" rx="3" class="accent"/>
+<text x="1408" y="384" class="ntitle mono">WorkerPool</text>
+<text x="1408" y="401" class="nline">bounded: 5 threads · 5 permits</text>
+<text x="1408" y="418" class="nline">JobRunner →</text>
+<text x="1408" y="435" class="nline">SimulatedJobExecutor</text>
+</g>
+<g class="node reg">
+<rect x="1392" y="500" width="208" height="70" rx="10" class="nbox"/>
+<rect x="1392" y="500" width="6" height="70" rx="3" class="accent"/>
+<text x="1408" y="524" class="ntitle mono">ActiveExecutions</text>
+<text x="1408" y="541" class="nline">active execution registry</text>
+<text x="1408" y="558" class="nline">(local to this JVM)</text>
+</g>
+<g class="node bg">
+<rect x="1156" y="660" width="136" height="80" rx="10" class="nbox"/>
+<rect x="1156" y="660" width="6" height="80" rx="3" class="accent"/>
+<text x="1172" y="684" class="ntitle mono small">LeaseHeartbeat</text>
+<text x="1172" y="701" class="nline">scheduled · 10 s</text>
+<text x="1172" y="718" class="nline">renews leases</text>
+</g>
+<g class="node bg">
+<rect x="1300" y="660" width="156" height="80" rx="10" class="nbox"/>
+<rect x="1300" y="660" width="6" height="80" rx="3" class="accent"/>
+<text x="1316" y="684" class="ntitle mono small">CancellationWatcher</text>
+<text x="1316" y="701" class="nline">scheduled · 500 ms</text>
+<text x="1316" y="718" class="nline">detects cancel requests</text>
+</g>
+<g class="node bg">
+<rect x="1464" y="660" width="136" height="80" rx="10" class="nbox"/>
+<rect x="1464" y="660" width="6" height="80" rx="3" class="accent"/>
+<text x="1480" y="684" class="ntitle mono small">RecoveryManager</text>
+<text x="1480" y="701" class="nline">scheduled · 5 s</text>
+<text x="1480" y="718" class="nline">expired leases</text>
+</g>
+<g class="node svc">
+<rect x="1156" y="800" width="444" height="96" rx="10" class="nbox"/>
+<rect x="1156" y="800" width="6" height="96" rx="3" class="accent"/>
+<text x="1172" y="824" class="ntitle mono">JobLifecycleService</text>
+<text x="1172" y="841" class="nline">claimNext · complete · fail · confirmCancelled · releaseClaim</text>
+<text x="1172" y="858" class="nline">renewLease · findCancellationRequests · recoverNextExpiredLease</text>
+<text x="1172" y="875" class="nline">every write fenced by worker_id + fencing_token</text>
+</g>
+<path d="M1010,456 L1010,500" class="edge call" marker-end="url(#arrow-call)"/>
+<g class="elabel call">
+<rect x="966.04" y="468" width="87.92" height="20" rx="6"/>
+<text x="1010" y="480" text-anchor="middle">method calls</text>
+</g>
+<path d="M1346,408 L1392,408" class="edge bg" marker-end="url(#arrow-bg)"/>
+<g class="elabel bg">
+<rect x="1343.52" y="374" width="50.96" height="20" rx="6"/>
+<text x="1369" y="386" text-anchor="middle">submit</text>
+</g>
+<path d="M1156,420 L1138,420 L1138,860 L1156,860" class="edge bg" marker-end="url(#arrow-bg)"/>
+<g class="elabel bg">
+<rect x="1097.12" y="760" width="81.76" height="20" rx="6"/>
+<text x="1138" y="772" text-anchor="middle">claimNext()</text>
+</g>
+<path d="M1496,456 L1496,500" class="edge call" marker-end="url(#arrow-call)"/>
+<g class="elabel call">
+<rect x="1476.32" y="468" width="143.36" height="20" rx="6"/>
+<text x="1548" y="480" text-anchor="middle">register / unregister</text>
+</g>
+<path d="M1600,420 L1622,420 L1622,848 L1600,848" class="edge call" marker-end="url(#arrow-call)"/>
+<g class="elabel call">
+<rect x="1488.64" y="592" width="118.72000000000001" height="48" rx="6"/>
+<text x="1548" y="604" text-anchor="middle">record result:</text>
+<text x="1548" y="618" text-anchor="middle">complete · fail ·</text>
+<text x="1548" y="632" text-anchor="middle">confirmCancelled</text>
+</g>
+<path d="M1226,740 L1226,800" class="edge bg" marker-end="url(#arrow-bg)"/>
+<g class="elabel bg">
+<rect x="1182.04" y="752" width="87.92" height="20" rx="6"/>
+<text x="1226" y="764" text-anchor="middle">renewLease()</text>
+</g>
+<path d="M1378,740 L1378,800" class="edge bg" marker-end="url(#arrow-bg)"/>
+<g class="elabel bg">
+<rect x="1290.92" y="774" width="174.16000000000003" height="20" rx="6"/>
+<text x="1378" y="786" text-anchor="middle">findCancellationRequests()</text>
+</g>
+<path d="M1532,740 L1532,800" class="edge bg" marker-end="url(#arrow-bg)"/>
+<g class="elabel bg">
+<rect x="1448" y="752" width="168.00000000000003" height="20" rx="6"/>
+<text x="1532" y="764" text-anchor="middle">recoverNextExpiredLease()</text>
+</g>
+<path d="M1272,660 L1420,570" class="edge bg" marker-end="url(#arrow-bg)"/>
+<g class="elabel bg">
+<rect x="1284.96" y="608" width="94.08000000000001" height="20" rx="6"/>
+<text x="1332" y="620" text-anchor="middle">requestStop()</text>
+</g>
+<path d="M1410,660 L1492,570" class="edge bg" marker-end="url(#arrow-bg)"/>
+<g class="elabel bg">
+<rect x="1410.96" y="620" width="94.08000000000001" height="20" rx="6"/>
+<text x="1458" y="632" text-anchor="middle">requestStop()</text>
+</g>
+<path d="M560,200 L440,200 L440,286 L170,286 L170,360" class="edge http" marker-end="url(#arrow-http)"/>
+<g class="elabel http">
+<rect x="245.64" y="276" width="118.72000000000001" height="20" rx="6"/>
+<text x="305" y="288" text-anchor="middle">HTTP · Bearer JWT</text>
+</g>
+<path d="M1120,200 L1240,200 L1240,286 L1010,286 L1010,360" class="edge http" marker-end="url(#arrow-http)"/>
+<g class="elabel http">
+<rect x="1065.64" y="276" width="118.72000000000001" height="20" rx="6"/>
+<text x="1125" y="288" text-anchor="middle">HTTP · Bearer JWT</text>
+</g>
+<g class="db">
+<path d="M340,1078 a500,18 0 0,1 1000,0 v104 a500,18 0 0,1 -1000,0 z" class="dbbody"/>
+<ellipse cx="840" cy="1078" rx="500" ry="18" class="dbtop"/>
+<text x="840" y="1126" class="dbtitle" text-anchor="middle">Shared PostgreSQL 17 — single source of truth and persistent job queue</text>
+<text x="840" y="1152" class="dbline mono" text-anchor="middle">jobs · job_attempts · idempotency_keys · users</text>
+<text x="840" y="1174" class="dbline" text-anchor="middle">row locks, partial indexes, CHECK constraints, Flyway migrations, database clock (now()) for leases</text>
+</g>
+<path d="M170,650 L170,1000 L400,1000 L400,1062" class="edge db" marker-end="url(#arrow-db)"/>
+<g class="elabel db">
+<rect x="129.04" y="1005" width="241.92000000000002" height="62" rx="6"/>
+<text x="250" y="1017" text-anchor="middle">INSERT job + idempotency key (one tx)</text>
+<text x="250" y="1031" text-anchor="middle">cancel: SELECT … FOR UPDATE</text>
+<text x="250" y="1045" text-anchor="middle">→ CANCELLED / CANCEL_REQUESTED</text>
+<text x="250" y="1059" text-anchor="middle">owner-scoped reads</text>
+</g>
+<path d="M538,896 L538,1060" class="edge db" marker-end="url(#arrow-db)"/>
+<g class="elabel db">
+<rect x="413.96" y="937" width="248.08" height="62" rx="6"/>
+<text x="538" y="949" text-anchor="middle">claim: SELECT … FOR UPDATE SKIP LOCKED</text>
+<text x="538" y="963" text-anchor="middle">status + attempt UPDATE … WHERE</text>
+<text x="538" y="977" text-anchor="middle">worker_id = ? AND fencing_token = ?</text>
+<text x="538" y="991" text-anchor="middle">lease renewal · expired-lease recovery</text>
+</g>
+<path d="M1010,650 L1010,1060" class="edge db" marker-end="url(#arrow-db)"/>
+<g class="elabel db">
+<rect x="889.04" y="937" width="241.92000000000002" height="62" rx="6"/>
+<text x="1010" y="949" text-anchor="middle">INSERT job + idempotency key (one tx)</text>
+<text x="1010" y="963" text-anchor="middle">cancel: SELECT … FOR UPDATE</text>
+<text x="1010" y="977" text-anchor="middle">→ CANCELLED / CANCEL_REQUESTED</text>
+<text x="1010" y="991" text-anchor="middle">owner-scoped reads</text>
+</g>
+<path d="M1378,896 L1378,1000 L1280,1000 L1280,1062" class="edge db" marker-end="url(#arrow-db)"/>
+<g class="elabel db">
+<rect x="1335.96" y="1005" width="248.08" height="62" rx="6"/>
+<text x="1460" y="1017" text-anchor="middle">claim: SELECT … FOR UPDATE SKIP LOCKED</text>
+<text x="1460" y="1031" text-anchor="middle">status + attempt UPDATE … WHERE</text>
+<text x="1460" y="1045" text-anchor="middle">worker_id = ? AND fencing_token = ?</text>
+<text x="1460" y="1059" text-anchor="middle">lease renewal · expired-lease recovery</text>
+</g>
+</svg>
+<div class="hint">Scroll to zoom · drag to pan · 0 = fit</div>
+</div>
+<script>
+(function () {
+  var svg = document.getElementById('diagram');
+  var viewport = document.getElementById('viewport');
+  var level = document.getElementById('zoom-level');
+  var FULL = { x: 0, y: 0, w: 1680, h: 1230 };
+  var view = { x: FULL.x, y: FULL.y, w: FULL.w, h: FULL.h };
+
+  function apply() {
+    svg.setAttribute('viewBox', view.x + ' ' + view.y + ' ' + view.w + ' ' + view.h);
+    var r = viewport.getBoundingClientRect();
+    var scale = Math.min(r.width / view.w, r.height / view.h);
+    level.textContent = Math.round(scale * 100) + '%';
+  }
+  function fit() { view = { x: FULL.x, y: FULL.y, w: FULL.w, h: FULL.h }; apply(); }
+  function actualSize() {
+    var r = viewport.getBoundingClientRect();
+    view = { x: 0, y: 0, w: r.width, h: r.height }; apply();
+  }
+  function zoom(factor, cx, cy) {
+    var r = viewport.getBoundingClientRect();
+    var px = cx === undefined ? 0.5 : (cx - r.left) / r.width;
+    var py = cy === undefined ? 0.5 : (cy - r.top) / r.height;
+    var nw = Math.min(Math.max(view.w / factor, 200), FULL.w * 4);
+    var nh = nw * (view.h / view.w);
+    view.x += (view.w - nw) * px; view.y += (view.h - nh) * py;
+    view.w = nw; view.h = nh; apply();
+  }
+  viewport.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    zoom(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX, e.clientY);
+  }, { passive: false });
+  var drag = null;
+  viewport.addEventListener('pointerdown', function (e) {
+    drag = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
+    viewport.classList.add('dragging'); viewport.setPointerCapture(e.pointerId);
+  });
+  viewport.addEventListener('pointermove', function (e) {
+    if (!drag) return;
+    var r = viewport.getBoundingClientRect();
+    var s = Math.max(view.w / r.width, view.h / r.height);
+    view.x = drag.vx - (e.clientX - drag.x) * s; view.y = drag.vy - (e.clientY - drag.y) * s; apply();
+  });
+  function endDrag() { drag = null; viewport.classList.remove('dragging'); }
+  viewport.addEventListener('pointerup', endDrag);
+  viewport.addEventListener('pointercancel', endDrag);
+  document.getElementById('zoom-in').addEventListener('click', function () { zoom(1.25); });
+  document.getElementById('zoom-out').addEventListener('click', function () { zoom(1 / 1.25); });
+  document.getElementById('fit').addEventListener('click', fit);
+  document.getElementById('actual').addEventListener('click', actualSize);
+  window.addEventListener('keydown', function (e) {
+    if (e.key === '+' || e.key === '=') zoom(1.25);
+    else if (e.key === '-') zoom(1 / 1.25);
+    else if (e.key === '0') fit();
+    else if (e.key === '1') actualSize();
+  });
+  window.addEventListener('resize', apply);
+  fit();
+})();
+</script>
+</body>
+</html>

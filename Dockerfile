@@ -5,8 +5,10 @@ FROM eclipse-temurin:21-jdk-noble AS build
 WORKDIR /workspace
 
 # Resolve dependencies in their own layer so source changes don't re-download them.
+# chmod: the build must not depend on the executable bit surviving the checkout (e.g. ZIP downloads).
 COPY .mvn/ .mvn/
 COPY mvnw pom.xml ./
+RUN chmod +x mvnw
 RUN --mount=type=cache,target=/root/.m2 ./mvnw -B -q dependency:go-offline
 
 COPY src/ src/

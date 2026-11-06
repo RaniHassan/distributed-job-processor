@@ -4,15 +4,17 @@ This file contains mandatory development instructions for this repository.
 
 ## Source of Truth
 
-- `README.md` is the authoritative technical specification for this project.
-- Read the entire README before starting any task.
+- `docs/SPECIFICATION.md` is the authoritative technical specification for this project.
+- Read the entire specification before starting any task.
 - Follow its architecture, requirements, technology decisions, database design, API contracts and implementation priorities.
+- Approved deviations from the specification are listed in `docs/ARCHITECTURE.md`.
+- `README.md` is the reviewer-facing documentation of the delivered system; keep it accurate.
 - Never silently change or ignore a requirement.
 - Never introduce an unapproved technology or architectural change.
 
 ## Development Workflow
 
-- Work incrementally, following the implementation phases in README.md.
+- Work incrementally, following the implementation phases in docs/SPECIFICATION.md.
 - Implement only the currently approved phase.
 - Before making changes, explain the implementation plan.
 - After implementation, run relevant tests and report the results.
@@ -59,4 +61,4 @@ At the end of every implementation phase, report:
 - Known limitations.
 - What is planned for the next phase.
 
-Always prioritize correctness, reliability, maintainability and compliance with README.md over implementation speed.
+Always prioritize correctness, reliability, maintainability and compliance with docs/SPECIFICATION.md over implementation speed.

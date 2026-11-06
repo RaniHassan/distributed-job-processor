@@ -1,5 +1,6 @@
 # Local environment: one PostgreSQL database shared by two application instances.
-# Copy .env.example to .env and set POSTGRES_PASSWORD before running `docker compose up`.
+# Only Docker is needed: the application is built inside the image (see Dockerfile).
+# Copy .env.example to .env and fill in the four secrets before `docker compose up` (see README).
 
 name: job-processor
 
@@ -25,11 +26,12 @@ x-app-env: &app-env
   SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-jobprocessor}
   SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
   JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env (at least 32 characters)}
-  # Seed users exist only in the dev profile.
+  # Users seeded at startup by the dev profile (the Compose default). Without these passwords the
+  # instances would fail at startup, so Compose refuses to start with a clear message instead.
   SEED_USER_USERNAME: ${SEED_USER_USERNAME:-alice}
-  SEED_USER_PASSWORD: ${SEED_USER_PASSWORD:-}
+  SEED_USER_PASSWORD: ${SEED_USER_PASSWORD:?Set SEED_USER_PASSWORD in .env}
   SEED_ADMIN_USERNAME: ${SEED_ADMIN_USERNAME:-admin}
-  SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
+  SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:?Set SEED_ADMIN_PASSWORD in .env}
 
 services:
   postgres:
