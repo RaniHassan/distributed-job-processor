@@ -13,6 +13,12 @@ spring:
       # The JDBC driver otherwise inherits the JVM's time zone for the session; pin it so
       # SQL date/time functions behave identically on every instance.
       connection-init-sql: SET TIME ZONE 'UTC'
+      data-source-properties:
+        # Without these, a database that hangs (e.g. network partition) blocks request, dispatcher,
+        # heartbeat and recovery threads forever. Seconds; longer than any legitimate statement or
+        # row-lock wait in this application, which are all short transactions.
+        connectTimeout: ${DB_CONNECT_TIMEOUT_SECONDS:5}
+        socketTimeout: ${DB_SOCKET_TIMEOUT_SECONDS:15}
   jpa:
     open-in-view: false
     hibernate:

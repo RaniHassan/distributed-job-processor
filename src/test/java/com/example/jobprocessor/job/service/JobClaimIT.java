@@ -2,6 +2,7 @@ package com.example.jobprocessor.job.service;
 
 import static com.example.jobprocessor.TestRows.now;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.example.jobprocessor.ApiIntegrationTest;
 import com.example.jobprocessor.TestRows;
@@ -184,6 +185,28 @@ class JobClaimIT {
         assertThat(jdbc.queryForObject("""
                 SELECT count(*) FROM jobs j JOIN job_attempts a ON a.job_id = j.id
                 WHERE a.worker_id <> j.worker_id OR a.fencing_token <> j.fencing_token""", Long.class)).isZero();
+    }
+
+    /**
+     * README §10: the claim is one transaction. If the attempt cannot be written, the job update
+     * rolls back with it: no ownership, no token increment, no half-claimed job.
+     */
+    @Test
+    void claimIsAllOrNothing() {
+        UUID id = rows.job(owner).insert();
+        // A conflicting attempt row makes the claim's attempt insert fail after the job was updated.
+        rows.attempt(id, 1).set("status", "FAILED").set("finished_at", now()).insert();
+
+        assertThatThrownBy(() -> lifecycle.claimNext("worker-a"))
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class)
+                .hasMessageContaining("uq_job_attempts_job_attempt");
+
+        Map<String, Object> row = job(id);
+        assertThat(row).containsEntry("status", "PENDING").containsEntry("fencing_token", 0L);
+        assertThat(row.get("worker_id")).isNull();
+        assertThat(row.get("lease_until")).isNull();
+        assertThat(row.get("started_at")).isNull();
+        assertThat(attempts(id)).hasSize(1);
     }
 
     @Test
