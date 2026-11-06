@@ -9,6 +9,7 @@ import com.example.jobprocessor.job.lifecycle.RetryPolicy;
 import com.example.jobprocessor.job.repository.JobStateRepository;
 import com.example.jobprocessor.job.repository.JobStateRepository.ClaimRow;
 import com.example.jobprocessor.job.repository.JobStateRepository.ExpiredLease;
+import com.example.jobprocessor.job.repository.JobStateRepository.OwnedJob;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -74,24 +75,73 @@ public class JobLifecycleService {
         return Optional.of(new ClaimedJob(row.jobId(), workerId, row.fencingToken(), parsePayload(row.payloadJson())));
     }
 
-    /** @return {@code false} if this worker no longer owns the job; nothing is written then */
+    /*
+     * Recording a worker's result. Each operation locks the job row for this exact ownership
+     * generation and decides from the status it finds. A cancellation request also locks the row,
+     * so the two are strictly ordered (README §9.2): if cancellation committed first, the result
+     * becomes CANCELLED and COMPLETED is never written; if completion committed first, the
+     * cancellation request sees a finished job and is rejected.
+     */
+
+    /** Successful execution: COMPLETED, or CANCELLED if cancellation was requested meanwhile. */
     @Transactional
-    public boolean complete(ClaimedJob job) {
-        return finish(job, JobStatus.COMPLETED, AttemptStatus.SUCCEEDED, null,
-                () -> jobStates.complete(job.jobId(), job.workerId(), job.fencingToken()));
+    public RecordedOutcome complete(ClaimedJob job) {
+        Optional<OwnedJob> owned = jobStates.lockOwned(job.jobId(), job.workerId(), job.fencingToken());
+        if (owned.isEmpty()) {
+            return ownershipLost(job, "completion");
+        }
+        return switch (owned.get().status()) {
+            case RUNNING -> {
+                apply(job, JobStatus.RUNNING, JobStatus.COMPLETED, AttemptStatus.SUCCEEDED, null,
+                        () -> jobStates.complete(job.jobId(), job.workerId(), job.fencingToken()));
+                yield RecordedOutcome.COMPLETED;
+            }
+            case CANCEL_REQUESTED -> cancel(job, "Finished after cancellation was requested; result discarded");
+            default -> ownershipLost(job, "completion");
+        };
     }
 
     /**
-     * Records a failed attempt. Until the retry policy exists, every failure is final; the
-     * classification is kept in the error message.
-     *
-     * @return {@code false} if this worker no longer owns the job; nothing is written then
+     * Failed execution (README §12). Retryable failures (TRANSIENT, and UNEXPECTED within the same
+     * bounded budget) go back to PENDING with backoff while retries remain; PERMANENT failures and
+     * exhausted budgets end FAILED. A pending cancellation request takes precedence: the job ends
+     * CANCELLED, not FAILED.
      */
     @Transactional
-    public boolean fail(ClaimedJob job, FailureType type, String message) {
+    public RecordedOutcome fail(ClaimedJob job, FailureType type, String message) {
         String error = truncate("[" + type + "] " + message);
-        return finish(job, JobStatus.FAILED, AttemptStatus.FAILED, error,
-                () -> jobStates.fail(job.jobId(), job.workerId(), job.fencingToken(), error));
+        Optional<OwnedJob> owned = jobStates.lockOwned(job.jobId(), job.workerId(), job.fencingToken());
+        if (owned.isEmpty()) {
+            return ownershipLost(job, "failure");
+        }
+        OwnedJob state = owned.get();
+        return switch (state.status()) {
+            case RUNNING -> {
+                if (retryPolicy.shouldRetry(type, state.retryCount(), state.maxRetries())) {
+                    Duration delay = retryPolicy.delayBeforeRetry(state.retryCount() + 1);
+                    apply(job, JobStatus.RUNNING, JobStatus.PENDING, AttemptStatus.FAILED, error,
+                            () -> jobStates.requeue(job.jobId(), job.workerId(), job.fencingToken(), delay, error));
+                    log.info("Retry scheduled: jobId={} retry={}/{} delay={}", job.jobId(), state.retryCount() + 1,
+                            state.maxRetries(), delay);
+                    yield RecordedOutcome.RETRY_SCHEDULED;
+                }
+                apply(job, JobStatus.RUNNING, JobStatus.FAILED, AttemptStatus.FAILED, error,
+                        () -> jobStates.fail(job.jobId(), job.workerId(), job.fencingToken(), error));
+                yield RecordedOutcome.FAILED;
+            }
+            case CANCEL_REQUESTED -> cancel(job, error + " (cancellation was requested)");
+            default -> ownershipLost(job, "failure");
+        };
+    }
+
+    /** The worker stopped because cancellation was requested: CANCEL_REQUESTED -> CANCELLED. */
+    @Transactional
+    public RecordedOutcome confirmCancelled(ClaimedJob job) {
+        Optional<OwnedJob> owned = jobStates.lockOwned(job.jobId(), job.workerId(), job.fencingToken());
+        if (owned.isPresent() && owned.get().status() == JobStatus.CANCEL_REQUESTED) {
+            return cancel(job, null);
+        }
+        return ownershipLost(job, "cancellation");
     }
 
     /**
@@ -100,8 +150,43 @@ public class JobLifecycleService {
      */
     @Transactional
     public boolean releaseClaim(ClaimedJob job, String reason) {
-        return finish(job, JobStatus.PENDING, AttemptStatus.ABANDONED, truncate(reason),
+        Optional<OwnedJob> owned = jobStates.lockOwned(job.jobId(), job.workerId(), job.fencingToken());
+        if (owned.isEmpty() || owned.get().status() != JobStatus.RUNNING) {
+            ownershipLost(job, "release");
+            return false;
+        }
+        apply(job, JobStatus.RUNNING, JobStatus.PENDING, AttemptStatus.ABANDONED, truncate(reason),
                 () -> jobStates.release(job.jobId(), job.workerId(), job.fencingToken()));
+        return true;
+    }
+
+    private RecordedOutcome cancel(ClaimedJob job, String attemptNote) {
+        apply(job, JobStatus.CANCEL_REQUESTED, JobStatus.CANCELLED, AttemptStatus.CANCELLED, attemptNote,
+                () -> jobStates.confirmCancelled(job.jobId(), job.workerId(), job.fencingToken()));
+        return RecordedOutcome.CANCELLED;
+    }
+
+    private static RecordedOutcome ownershipLost(ClaimedJob job, String what) {
+        log.warn("Ownership lost, {} not recorded: jobId={} workerId={} fencingToken={}",
+                what, job.jobId(), job.workerId(), job.fencingToken());
+        return RecordedOutcome.OWNERSHIP_LOST;
+    }
+
+    /**
+     * Applies a validated transition to a job locked for this generation, and closes its attempt,
+     * in the caller's transaction. With the row locked, anything other than one updated row each
+     * is a bug, so the transaction is rolled back rather than left half-applied.
+     */
+    private void apply(ClaimedJob job, JobStatus from, JobStatus to, AttemptStatus attemptStatus, String note,
+                       IntSupplier jobUpdate) {
+        JobStateMachine.requireTransition(from, to);
+        if (jobUpdate.getAsInt() != 1) {
+            throw new IllegalStateException("Transition " + from + " -> " + to + " did not apply to locked job " + job.jobId());
+        }
+        if (jobStates.closeAttempt(job.jobId(), job.fencingToken(), attemptStatus, note) != 1) {
+            throw new IllegalStateException("No open attempt " + job.attemptNumber() + " for job " + job.jobId());
+        }
+        log.info("Job {}: jobId={} workerId={} fencingToken={}", to, job.jobId(), job.workerId(), job.fencingToken());
     }
 
     /**
@@ -181,22 +266,6 @@ public class JobLifecycleService {
         if (rows != 1) {
             throw new IllegalStateException("Recovery update did not apply to locked job " + lease.jobId());
         }
-    }
-
-    private boolean finish(ClaimedJob job, JobStatus target, AttemptStatus attemptStatus, String error,
-                           IntSupplier jobUpdate) {
-        JobStateMachine.requireTransition(JobStatus.RUNNING, target);
-        if (jobUpdate.getAsInt() != 1) {
-            log.warn("Ownership lost, result not recorded: jobId={} workerId={} fencingToken={} intended={}",
-                    job.jobId(), job.workerId(), job.fencingToken(), target);
-            return false;
-        }
-        if (jobStates.closeAttempt(job.jobId(), job.fencingToken(), attemptStatus, error) != 1) {
-            // The owner's attempt must be open; roll back rather than leave job and attempt inconsistent.
-            throw new IllegalStateException("No open attempt " + job.attemptNumber() + " for job " + job.jobId());
-        }
-        log.info("Job {}: jobId={} workerId={} fencingToken={}", target, job.jobId(), job.workerId(), job.fencingToken());
-        return true;
     }
 
     private Map<String, Object> parsePayload(String json) {

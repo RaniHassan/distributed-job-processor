@@ -21,6 +21,15 @@ class RetryPolicyTest {
     }
 
     @Test
+    void onlyNonPermanentFailuresAreRetriedAndNeverBeyondTheBudget() {
+        assertThat(noJitter.shouldRetry(FailureType.TRANSIENT, 0, 3)).isTrue();
+        assertThat(noJitter.shouldRetry(FailureType.UNEXPECTED, 2, 3)).isTrue();
+        assertThat(noJitter.shouldRetry(FailureType.PERMANENT, 0, 3)).isFalse();
+        assertThat(noJitter.shouldRetry(FailureType.TRANSIENT, 3, 3)).isFalse();
+        assertThat(noJitter.shouldRetry(FailureType.UNEXPECTED, 3, 3)).isFalse();
+    }
+
+    @Test
     void usesTheConfiguredBackoffPerRetry() {
         assertThat(noJitter.delayBeforeRetry(1)).isEqualTo(Duration.ofSeconds(5));
         assertThat(noJitter.delayBeforeRetry(2)).isEqualTo(Duration.ofSeconds(10));

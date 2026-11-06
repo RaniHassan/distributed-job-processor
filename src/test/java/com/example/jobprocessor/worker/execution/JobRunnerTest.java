@@ -16,6 +16,7 @@ import com.example.jobprocessor.TestProperties;
 import com.example.jobprocessor.job.lifecycle.FailureType;
 import com.example.jobprocessor.job.service.ClaimedJob;
 import com.example.jobprocessor.job.service.JobLifecycleService;
+import com.example.jobprocessor.job.service.RecordedOutcome;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
@@ -43,7 +44,7 @@ class JobRunnerTest {
 
     @Test
     void successIsRecordedAsCompletion() {
-        when(lifecycle.complete(job)).thenReturn(true);
+        when(lifecycle.complete(job)).thenReturn(RecordedOutcome.COMPLETED);
 
         run();
 
@@ -77,6 +78,33 @@ class JobRunnerTest {
         run();
 
         verify(lifecycle).fail(job, FailureType.UNEXPECTED, "Unexpected processing error");
+    }
+
+    @Test
+    void jobStoppedForCancellationConfirmsIt() throws Exception {
+        doAnswer(invocation -> {
+            executions.active().get(0).requestStop(StopReason.CANCELLATION_REQUESTED);
+            throw new InterruptedException();
+        }).when(executor).execute(eq(job), any());
+        when(lifecycle.confirmCancelled(job)).thenReturn(RecordedOutcome.CANCELLED);
+
+        run();
+
+        verify(lifecycle).confirmCancelled(job);
+        verify(lifecycle, never()).complete(any());
+        verify(lifecycle, never()).fail(any(), any(), any());
+    }
+
+    @Test
+    void jobStoppedForLostOwnershipRecordsNothing() throws Exception {
+        doAnswer(invocation -> {
+            executions.active().get(0).requestStop(StopReason.OWNERSHIP_LOST);
+            throw new InterruptedException();
+        }).when(executor).execute(eq(job), any());
+
+        run();
+
+        verifyNoInteractions(lifecycle);
     }
 
     @Test
@@ -126,7 +154,7 @@ class JobRunnerTest {
         }).when(executor).execute(eq(job), any());
         when(lifecycle.complete(job)).thenAnswer(invocation -> {
             assertThat(Thread.currentThread().isInterrupted()).as("interrupt cleared before recording").isFalse();
-            return false; // the fenced update rejects it, as it would after a real ownership loss
+            return RecordedOutcome.OWNERSHIP_LOST; // the fenced update rejects it, as it would after a real ownership loss
         });
 
         run();
@@ -136,7 +164,7 @@ class JobRunnerTest {
 
     @Test
     void lostOwnershipIsNotAnError() {
-        when(lifecycle.complete(job)).thenReturn(false);
+        when(lifecycle.complete(job)).thenReturn(RecordedOutcome.OWNERSHIP_LOST);
 
         assertThatCode(this::run).doesNotThrowAnyException();
     }

@@ -37,6 +37,14 @@ public class RetryPolicy {
         return retryCount < maxRetries;
     }
 
+    /**
+     * Whether a failed attempt is retried: transient failures and unexpected ones (an explicit,
+     * bounded policy, never indefinite) while the budget lasts; permanent failures never.
+     */
+    public boolean shouldRetry(FailureType type, int retryCount, int maxRetries) {
+        return type != FailureType.PERMANENT && hasRetriesLeft(retryCount, maxRetries);
+    }
+
     /** Delay before retry number {@code retryNumber} (1 for the first retry). */
     public Duration delayBeforeRetry(int retryNumber) {
         if (retryNumber < 1) {

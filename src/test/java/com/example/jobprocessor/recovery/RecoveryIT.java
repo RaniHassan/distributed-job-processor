@@ -8,6 +8,7 @@ import com.example.jobprocessor.job.lifecycle.FailureType;
 import com.example.jobprocessor.job.service.ClaimedJob;
 import com.example.jobprocessor.job.service.JobLifecycleService;
 import com.example.jobprocessor.job.service.LeaseStatus;
+import com.example.jobprocessor.job.service.RecordedOutcome;
 import com.example.jobprocessor.job.service.RecoveredJob;
 import com.example.jobprocessor.recovery.service.RecoveryManager;
 import java.time.Duration;
@@ -116,7 +117,7 @@ class RecoveryIT {
 
         assertThat(retry.jobId()).isEqualTo(crashed.jobId());
         assertThat(retry.fencingToken()).isEqualTo(2);
-        assertThat(lifecycle.complete(retry)).isTrue();
+        assertThat(lifecycle.complete(retry)).isEqualTo(RecordedOutcome.COMPLETED);
         assertThat(attempts(crashed.jobId())).extracting(a -> a.get("status")).containsExactly("ABANDONED", "SUCCEEDED");
         assertThat(job(crashed.jobId())).containsEntry("status", "COMPLETED").containsEntry("retry_count", 1);
     }
@@ -189,18 +190,18 @@ class RecoveryIT {
 
         // The paused worker wakes up before anyone reclaims the job...
         assertThat(lifecycle.renewLease(stale)).isEqualTo(LeaseStatus.LOST);
-        assertThat(lifecycle.complete(stale)).isFalse();
-        assertThat(lifecycle.fail(stale, FailureType.TRANSIENT, "late")).isFalse();
+        assertThat(lifecycle.complete(stale)).isEqualTo(RecordedOutcome.OWNERSHIP_LOST);
+        assertThat(lifecycle.fail(stale, FailureType.TRANSIENT, "late")).isEqualTo(RecordedOutcome.OWNERSHIP_LOST);
         assertThat(job(stale.jobId())).containsEntry("status", "PENDING");
 
         // ...and after another worker reclaimed it.
         Thread.sleep(300);
         ClaimedJob current = lifecycle.claimNext("new-owner").orElseThrow();
-        assertThat(lifecycle.complete(stale)).isFalse();
+        assertThat(lifecycle.complete(stale)).isEqualTo(RecordedOutcome.OWNERSHIP_LOST);
         assertThat(lifecycle.renewLease(stale)).isEqualTo(LeaseStatus.LOST);
         assertThat(job(stale.jobId())).containsEntry("status", "RUNNING").containsEntry("worker_id", "new-owner")
                 .containsEntry("fencing_token", 2L);
-        assertThat(lifecycle.complete(current)).isTrue();
+        assertThat(lifecycle.complete(current)).isEqualTo(RecordedOutcome.COMPLETED);
     }
 
     @Test

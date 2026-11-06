@@ -141,6 +141,22 @@ public class JobStateRepository {
                 """, lease.toMillis() / 1000.0, jobId, workerId, fencingToken);
     }
 
+    /**
+     * Locks the job if this exact ownership generation still holds it, waiting for any concurrent
+     * cancellation request to commit, and returns what the result decision depends on.
+     */
+    public Optional<OwnedJob> lockOwned(UUID jobId, String workerId, long fencingToken) {
+        return jdbc.query("""
+                        SELECT status, retry_count, max_retries FROM jobs
+                        WHERE id = ? AND worker_id = ? AND fencing_token = ?
+                        FOR UPDATE
+                        """,
+                        (rs, i) -> new OwnedJob(JobStatus.valueOf(rs.getString("status")), rs.getInt("retry_count"),
+                                rs.getInt("max_retries")),
+                        jobId, workerId, fencingToken)
+                .stream().findFirst();
+    }
+
     /** The job's status if this exact ownership generation still holds it. */
     public Optional<JobStatus> statusIfOwned(UUID jobId, String workerId, long fencingToken) {
         return jdbc.query("SELECT status FROM jobs WHERE id = ? AND worker_id = ? AND fencing_token = ?",
@@ -208,6 +224,9 @@ public class JobStateRepository {
     }
 
     public record ClaimRow(UUID jobId, long fencingToken, String payloadJson) {
+    }
+
+    public record OwnedJob(JobStatus status, int retryCount, int maxRetries) {
     }
 
     public record ExpiredLease(UUID jobId, JobStatus status, String workerId, long fencingToken,

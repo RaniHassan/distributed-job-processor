@@ -145,22 +145,52 @@ class JobProcessingIT {
         assertThat(row.get("completed_at")).isNull();
         assertThat(row.get("finished_at")).isNotNull();
         assertThat(row.get("worker_id")).isNull();
-        assertThat(jdbc.queryForMap("SELECT * FROM job_attempts WHERE job_id = ?", id))
-                .containsEntry("status", "FAILED").containsEntry("error_message", "[PERMANENT] Simulated permanent failure");
+        assertThat(jdbc.queryForList("SELECT * FROM job_attempts WHERE job_id = ?", id))
+                .as("permanent failures are not retried").singleElement()
+                .satisfies(a -> assertThat(a).containsEntry("status", "FAILED")
+                        .containsEntry("error_message", "[PERMANENT] Simulated permanent failure"));
+        assertThat(row).containsEntry("retry_count", 0);
     }
 
-    /** Phase 4: failures are classified and recorded; the retry policy that acts on TRANSIENT arrives in Phase 6. */
+    /** README §12: a transient failure is retried after a backoff, and the retry can succeed. */
     @Test
-    void transientAndUnexpectedFailuresAreClassified() {
+    void transientFailureIsRetriedAndThenSucceeds() {
+        UUID id = insertJob("{\"durationMs\":500,\"failureMode\":\"TRANSIENT_ONCE\"}");
+
+        await().atMost(TIMEOUT).until(() -> "COMPLETED".equals(jobStatus(id)));
+
+        assertThat(jdbc.queryForMap("SELECT retry_count, fencing_token, error_message FROM jobs WHERE id = ?", id))
+                .containsEntry("retry_count", 1).containsEntry("fencing_token", 2L)
+                .containsEntry("error_message", "[TRANSIENT] Simulated transient failure");
+        assertThat(jdbc.queryForList("SELECT status FROM job_attempts WHERE job_id = ? ORDER BY attempt_number", String.class, id))
+                .containsExactly("FAILED", "SUCCEEDED");
+    }
+
+    /**
+     * Transient and unexpected failures use the same bounded budget: the initial attempt plus
+     * 3 retries (backoff 200/400/800 ms in tests), then FAILED. Never retried indefinitely.
+     */
+    @Test
+    void persistentFailuresStopAfterTheRetryBudget() {
         UUID transientJob = insertJob("{\"durationMs\":500,\"failureMode\":\"TRANSIENT_ALWAYS\"}");
         UUID unexpectedJob = insertJob("{\"durationMs\":500,\"failureMode\":\"UNEXPECTED_ALWAYS\"}");
 
-        await().atMost(TIMEOUT).until(() -> "FAILED".equals(jobStatus(transientJob)) && "FAILED".equals(jobStatus(unexpectedJob)));
+        await().atMost(Duration.ofSeconds(30))
+                .until(() -> "FAILED".equals(jobStatus(transientJob)) && "FAILED".equals(jobStatus(unexpectedJob)));
 
+        for (UUID id : List.of(transientJob, unexpectedJob)) {
+            assertThat(jdbc.queryForObject("SELECT retry_count FROM jobs WHERE id = ?", Integer.class, id)).isEqualTo(3);
+            assertThat(jdbc.queryForList("SELECT status FROM job_attempts WHERE job_id = ? ORDER BY attempt_number",
+                    String.class, id)).containsExactly("FAILED", "FAILED", "FAILED", "FAILED");
+        }
         assertThat(jdbc.queryForObject("SELECT error_message FROM jobs WHERE id = ?", String.class, transientJob))
                 .isEqualTo("[TRANSIENT] Simulated transient failure");
         assertThat(jdbc.queryForObject("SELECT error_message FROM jobs WHERE id = ?", String.class, unexpectedJob))
                 .isEqualTo("[UNEXPECTED] Unexpected processing error");
+        // Each retry waited for its backoff: 200 + 400 + 800 ms between the four attempts at least.
+        assertThat(jdbc.queryForObject("""
+                SELECT max(started_at) - min(started_at) >= interval '1.4 seconds'
+                FROM job_attempts WHERE job_id = ?""", Boolean.class, transientJob)).isTrue();
     }
 
     @Test

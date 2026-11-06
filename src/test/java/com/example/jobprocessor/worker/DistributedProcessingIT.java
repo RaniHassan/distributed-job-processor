@@ -163,12 +163,12 @@ class DistributedProcessingIT {
     }
 
     /**
-     * Phase 5 cancellation path: the watcher stops the worker within about one check interval;
-     * the lease is not renewed for a CANCEL_REQUESTED job, so Recovery finalizes CANCELLED once it
-     * expires. (Phase 6 adds the worker confirming the cancellation itself.)
+     * Cooperative cancellation (README §9.1): the request is made through the API, the worker's
+     * instance detects it in PostgreSQL within one check interval, the worker stops and records
+     * CANCELLED itself. (If the worker had died instead, Recovery would finalize it: RecoveryIT.)
      */
     @Test
-    void cancellingARunningJobStopsItsWorkerAndRecoveryFinalizesIt() throws Exception {
+    void cancellingARunningJobStopsItsWorkerWhichConfirmsTheCancellation() throws Exception {
         UUID id = pendingJob(6000);
         await().atMost(TIMEOUT).until(() -> "RUNNING".equals(jobStatus(id)));
 
@@ -177,19 +177,17 @@ class DistributedProcessingIT {
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.status").value("CANCEL_REQUESTED"));
 
-        await().atMost(Duration.ofSeconds(2)).until(() -> pool.activeCount() == 0);
-        assertThat(Duration.ofNanos(System.nanoTime() - cancelledAt)).as("worker stopped promptly").isLessThan(Duration.ofSeconds(1));
-
-        await().atMost(Duration.ofSeconds(6)).until(() -> "CANCELLED".equals(jobStatus(id)));
+        await().atMost(Duration.ofSeconds(2)).until(() -> "CANCELLED".equals(jobStatus(id)));
         assertThat(Duration.ofNanos(System.nanoTime() - cancelledAt))
-                .as("finalized before the 6s job would have ended").isLessThan(Duration.ofSeconds(6));
+                .as("stopped and confirmed by the worker, not by lease expiry").isLessThan(Duration.ofSeconds(1));
 
         Map<String, Object> row = job(id);
         assertThat(row.get("finished_at")).isNotNull();
         assertThat(row.get("completed_at")).isNull();
         assertThat(row.get("worker_id")).isNull();
         assertThat(row).containsEntry("retry_count", 0);
-        assertThat(attempts(id)).extracting(a -> a.get("status")).containsExactly("ABANDONED");
+        assertThat(attempts(id)).extracting(a -> a.get("status")).containsExactly("CANCELLED");
+        await().atMost(Duration.ofSeconds(2)).until(() -> pool.activeCount() == 0);
     }
 
     @Test

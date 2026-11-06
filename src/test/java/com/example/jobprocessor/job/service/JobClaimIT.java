@@ -217,7 +217,7 @@ class JobClaimIT {
         UUID id = rows.job(owner).insert();
         ClaimedJob claimed = lifecycle.claimNext("worker-a").orElseThrow();
 
-        assertThat(lifecycle.complete(claimed)).isTrue();
+        assertThat(lifecycle.complete(claimed)).isEqualTo(RecordedOutcome.COMPLETED);
 
         Map<String, Object> row = job(id);
         assertThat(row).containsEntry("status", "COMPLETED").containsEntry("fencing_token", 1L);
@@ -235,14 +235,64 @@ class JobClaimIT {
         UUID id = rows.job(owner).insert();
         ClaimedJob claimed = lifecycle.claimNext("worker-a").orElseThrow();
 
-        assertThat(lifecycle.fail(claimed, FailureType.PERMANENT, "Invalid input")).isTrue();
+        assertThat(lifecycle.fail(claimed, FailureType.PERMANENT, "Invalid input")).isEqualTo(RecordedOutcome.FAILED);
 
         Map<String, Object> row = job(id);
         assertThat(row).containsEntry("status", "FAILED").containsEntry("error_message", "[PERMANENT] Invalid input");
         assertThat(row.get("completed_at")).isNull();
         assertThat(row.get("finished_at")).isNotNull();
         assertThat(row.get("worker_id")).isNull();
+        assertThat(row).as("permanent failures never use a retry").containsEntry("retry_count", 0);
         assertThat(attempts(id).get(0)).containsEntry("status", "FAILED").containsEntry("error_message", "[PERMANENT] Invalid input");
+    }
+
+    // ---- retry policy (README §12; test backoff 200/400/800 ms, 3 retries) -----------------------
+
+    @Test
+    void transientFailureWithRetriesLeftIsRequeuedWithBackoff() {
+        UUID id = rows.job(owner).insert();
+        ClaimedJob claimed = lifecycle.claimNext("worker-a").orElseThrow();
+
+        assertThat(lifecycle.fail(claimed, FailureType.TRANSIENT, "Upstream timed out"))
+                .isEqualTo(RecordedOutcome.RETRY_SCHEDULED);
+
+        Map<String, Object> row = job(id);
+        assertThat(row).containsEntry("status", "PENDING").containsEntry("retry_count", 1)
+                .containsEntry("error_message", "[TRANSIENT] Upstream timed out");
+        assertThat(row.get("worker_id")).isNull();
+        assertThat(row.get("lease_until")).isNull();
+        assertThat(row.get("heartbeat_at")).isNull();
+        assertThat(row.get("finished_at")).isNull();
+        assertThat(jdbc.queryForObject("SELECT next_retry_at > now() + interval '100 milliseconds' FROM jobs WHERE id = ?",
+                Boolean.class, id)).as("backoff applied").isTrue();
+        assertThat(attempts(id).get(0)).containsEntry("status", "FAILED")
+                .containsEntry("error_message", "[TRANSIENT] Upstream timed out");
+        assertThat(lifecycle.claimNext("worker-b")).as("not claimable before the backoff").isEmpty();
+    }
+
+    @Test
+    void retriesAreBoundedForTransientAndUnexpectedFailures() {
+        UUID transientJob = rows.job(owner).set("retry_count", 3).insert();
+        UUID unexpectedJob = rows.job(owner).set("retry_count", 3).insert();
+        ClaimedJob first = lifecycle.claimNext("worker-a").orElseThrow();
+        ClaimedJob second = lifecycle.claimNext("worker-a").orElseThrow();
+
+        assertThat(lifecycle.fail(first, FailureType.TRANSIENT, "timeout")).isEqualTo(RecordedOutcome.FAILED);
+        assertThat(lifecycle.fail(second, FailureType.UNEXPECTED, "Unexpected processing error")).isEqualTo(RecordedOutcome.FAILED);
+
+        for (UUID id : List.of(transientJob, unexpectedJob)) {
+            assertThat(job(id)).containsEntry("status", "FAILED").containsEntry("retry_count", 3);
+        }
+    }
+
+    @Test
+    void unexpectedFailureWithBudgetLeftIsRetried() {
+        UUID id = rows.job(owner).insert();
+        ClaimedJob claimed = lifecycle.claimNext("worker-a").orElseThrow();
+
+        assertThat(lifecycle.fail(claimed, FailureType.UNEXPECTED, "Unexpected processing error"))
+                .isEqualTo(RecordedOutcome.RETRY_SCHEDULED);
+        assertThat(job(id)).containsEntry("status", "PENDING").containsEntry("retry_count", 1);
     }
 
     @Test
@@ -263,15 +313,15 @@ class JobClaimIT {
         lifecycle.releaseClaim(stale, "simulated loss of ownership");
         ClaimedJob current = lifecycle.claimNext("worker-b").orElseThrow();
 
-        assertThat(lifecycle.complete(stale)).isFalse();
-        assertThat(lifecycle.fail(stale, FailureType.PERMANENT, "late")).isFalse();
+        assertThat(lifecycle.complete(stale)).isEqualTo(RecordedOutcome.OWNERSHIP_LOST);
+        assertThat(lifecycle.fail(stale, FailureType.PERMANENT, "late")).isEqualTo(RecordedOutcome.OWNERSHIP_LOST);
         assertThat(lifecycle.releaseClaim(stale, "late")).isFalse();
 
         Map<String, Object> row = job(id);
         assertThat(row).containsEntry("status", "RUNNING").containsEntry("worker_id", "worker-b").containsEntry("fencing_token", 2L);
         assertThat(attempts(id).get(1)).containsEntry("status", "RUNNING");
 
-        assertThat(lifecycle.complete(current)).isTrue();
+        assertThat(lifecycle.complete(current)).isEqualTo(RecordedOutcome.COMPLETED);
     }
 
     @Test
@@ -280,21 +330,66 @@ class JobClaimIT {
         ClaimedJob claimed = lifecycle.claimNext("worker-a").orElseThrow();
         ClaimedJob impostor = new ClaimedJob(id, "worker-x", claimed.fencingToken(), Map.of());
 
-        assertThat(lifecycle.complete(impostor)).isFalse();
+        assertThat(lifecycle.complete(impostor)).isEqualTo(RecordedOutcome.OWNERSHIP_LOST);
         assertThat(job(id)).containsEntry("status", "RUNNING").containsEntry("worker_id", "worker-a");
     }
 
+    // ---- cancellation committed before the worker's result (README §9.2) -------------------------
+
+    private ClaimedJob claimedWithCancellationRequest() {
+        rows.job(owner).insert();
+        ClaimedJob claimed = lifecycle.claimNext("worker-a").orElseThrow();
+        jdbc.update("UPDATE jobs SET status = 'CANCEL_REQUESTED', cancel_requested_at = now() WHERE id = ?", claimed.jobId());
+        return claimed;
+    }
+
+    private void assertCancelled(UUID id) {
+        Map<String, Object> row = job(id);
+        assertThat(row).containsEntry("status", "CANCELLED").containsEntry("retry_count", 0);
+        assertThat(row.get("completed_at")).as("COMPLETED is never written after cancellation").isNull();
+        assertThat(row.get("finished_at")).isNotNull();
+        assertThat(row.get("worker_id")).isNull();
+        assertThat(row.get("lease_until")).isNull();
+        assertThat(attempts(id).get(0)).containsEntry("status", "CANCELLED");
+    }
+
     @Test
-    void completionDoesNotOverwriteACancellationRequest() {
+    void completionAfterACancellationRequestRecordsCancelled() {
+        ClaimedJob claimed = claimedWithCancellationRequest();
+
+        assertThat(lifecycle.complete(claimed)).isEqualTo(RecordedOutcome.CANCELLED);
+
+        assertCancelled(claimed.jobId());
+        assertThat(attempts(claimed.jobId()).get(0).get("error_message")).asString().contains("result discarded");
+    }
+
+    @Test
+    void failureAfterACancellationRequestIsNotTreatedAsAFailure() {
+        ClaimedJob claimed = claimedWithCancellationRequest();
+
+        assertThat(lifecycle.fail(claimed, FailureType.TRANSIENT, "timeout")).isEqualTo(RecordedOutcome.CANCELLED);
+
+        assertCancelled(claimed.jobId());
+        assertThat(job(claimed.jobId()).get("error_message")).as("no retry, no failure recorded on the job").isNull();
+    }
+
+    @Test
+    void workerConfirmsCancellation() {
+        ClaimedJob claimed = claimedWithCancellationRequest();
+
+        assertThat(lifecycle.confirmCancelled(claimed)).isEqualTo(RecordedOutcome.CANCELLED);
+
+        assertCancelled(claimed.jobId());
+        assertThat(lifecycle.confirmCancelled(claimed)).as("only once").isEqualTo(RecordedOutcome.OWNERSHIP_LOST);
+    }
+
+    @Test
+    void cancellationConfirmationWithoutARequestWritesNothing() {
         UUID id = rows.job(owner).insert();
         ClaimedJob claimed = lifecycle.claimNext("worker-a").orElseThrow();
-        jdbc.update("UPDATE jobs SET status = 'CANCEL_REQUESTED', cancel_requested_at = now() WHERE id = ?", id);
 
-        assertThat(lifecycle.complete(claimed)).isFalse();
-        assertThat(lifecycle.fail(claimed, FailureType.TRANSIENT, "x")).isFalse();
-
-        assertThat(job(id)).containsEntry("status", "CANCEL_REQUESTED").containsEntry("worker_id", "worker-a");
-        assertThat(attempts(id).get(0)).containsEntry("status", "RUNNING");
+        assertThat(lifecycle.confirmCancelled(claimed)).isEqualTo(RecordedOutcome.OWNERSHIP_LOST);
+        assertThat(job(id)).containsEntry("status", "RUNNING").containsEntry("worker_id", "worker-a");
     }
 
     private UUID claim() {
